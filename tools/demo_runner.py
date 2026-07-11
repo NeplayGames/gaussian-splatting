@@ -35,11 +35,17 @@ def _load_metrics(model_dir, split, iteration):
     return {'psnr': vals['PSNR'], 'ssim': vals['SSIM'], 'lpips': vals['LPIPS']}
 
 
-def _fps_from_status(model_dir, render_status, split, iteration):
-    render_root = Path(model_dir) / split / f'ours_{iteration}' / 'renders'
-    n = len(list(render_root.glob('*.png')))
-    elapsed = max(float(render_status.get('elapsed_seconds', 0.0)), 1e-9)
-    return n / elapsed if n else 0.0
+def _load_budget(model_dir):
+    path = Path(model_dir) / 'optimization_budget.json'
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+def _budget_value(budget, *names, default='unavailable'):
+    for name in names:
+        if name in budget and budget[name] is not None:
+            return budget[name]
+    return default
 
 
 def _status(logs, step):
@@ -65,20 +71,20 @@ def run_demo(config, manifest, output_dir, scene_roots=None, iterations=1000, re
             metrics_cmd=[os.sys.executable, 'metrics.py', '-m', str(model_dir)]
             (logs/'commands.json').write_text(json.dumps({'train':train_cmd,'render':render_cmd,'metrics':metrics_cmd}, indent=2))
             try:
-                run_command(train_cmd, logs, 'train', resume=resume)
-                run_command(render_cmd, logs, 'render', resume=resume)
-                run_command(metrics_cmd, logs, 'metrics', resume=resume)
+                run_command(train_cmd, logs, 'train', resume=resume, expected_artifacts=[model_dir/'point_cloud'/f'iteration_{iterations}'/'point_cloud.ply', model_dir/'optimization_budget.json'])
+                run_command(render_cmd, logs, 'render', resume=resume, expected_artifacts=[model_dir/split/f'ours_{iterations}'/'renders', model_dir/split/f'ours_{iterations}'/'gt'])
+                run_command(metrics_cmd, logs, 'metrics', resume=resume, expected_artifacts=[model_dir/'metrics.json'])
             except StepError as e:
                 raise StepError(f"{e}. Log directory: {logs.resolve()}") from e
-            train_status=_status(logs,'train'); render_status=_status(logs,'render')
+            train_status=_status(logs,'train'); budget=_load_budget(model_dir)
             vals=_load_metrics(model_dir, split, iterations)
             ply=model_dir/'point_cloud'/f'iteration_{iterations}'/'point_cloud.ply'
             rec={"dataset":dataset_label,"scene":scene_name,"method":method,"seed":seed,"iteration":iterations,
                  "split":split,"psnr":round(vals['psnr'],6),"ssim":round(vals['ssim'],6),"lpips":round(vals['lpips'],6),
-                 "gaussian_count":_count_ply_vertices(ply),"model_size_bytes":_dir_size(model_dir),
-                 "training_time_seconds":round(train_status.get('elapsed_seconds',0),3),
-                 "peak_gpu_memory_bytes":train_status.get('peak_gpu_memory_bytes','unavailable'),
-                 "fps":round(_fps_from_status(model_dir, render_status, split, iterations),3),
+                 "gaussian_count":_budget_value(budget, 'gaussian_count', default=_count_ply_vertices(ply)),"model_size_bytes":_budget_value(budget, 'model_file_size_bytes', 'point_cloud_file_size_bytes', default=(ply.stat().st_size if ply.exists() else 'unavailable')),
+                 "training_time_seconds":round(_budget_value(budget, 'total_training_time_seconds', 'training_duration_seconds', default=train_status.get('elapsed_seconds',0)),3),
+                 "peak_gpu_memory_bytes":_budget_value(budget, 'peak_gpu_memory_bytes', 'peak_gpu_memory_allocated_bytes'),
+                 "fps":round(_budget_value(budget, 'render_fps', 'render_fps_recorded_during_training', default=0.0),3),
                  "local_repository_commit":_git_commit(),"model_path":str(model_dir.resolve()),"log_path":str(logs.resolve())}
             records.append(rec)
     return records
