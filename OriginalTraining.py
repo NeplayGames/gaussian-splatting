@@ -69,7 +69,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         use_saliency=args.use_saliency,
         lambda_edge=args.lambda_edge,
         lambda_saliency=args.lambda_saliency,
-        normalize=True,     
+        normalize=True,
+        constant_scaling_control=args.weighting_control,
     )
 
 
@@ -550,6 +551,8 @@ if __name__ == "__main__":
                         help="Weight for edge contribution")
     parser.add_argument("--lambda_saliency", type=float, default=0.1,
                         help="Weight for saliency contribution")
+    parser.add_argument("--weighting_control", action="store_true", default=False,
+                        help="Use L_control = c * L_3DGS, where c is the mean of the unnormalized edge/saliency weight map")
 
 
     args = parser.parse_args(sys.argv[1:])
