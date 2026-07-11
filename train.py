@@ -10,7 +10,9 @@
 #
 
 import os
+import json
 import math
+import time
 import random
 import numpy as np
 import torch
@@ -27,6 +29,7 @@ from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from LossCombiner import LossCombiner
+from TrainingReport import collect_optimization_budget
 import Edges
 import Saliency
 
@@ -134,6 +137,10 @@ except:
     SPARSE_ADAM_AVAILABLE = False
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, args):
+
+    training_start_time = time.perf_counter()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
@@ -317,6 +324,41 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
+
+    total_training_time = time.perf_counter() - training_start_time
+    render_fps = measure_render_fps(scene, gaussians, pipe, background, dataset.train_test_exp, SPARSE_ADAM_AVAILABLE)
+    budget = collect_optimization_budget(scene.model_path, gaussians=gaussians, render_fps=render_fps)
+    budget["total_training_time_seconds"] = total_training_time
+    write_budget_report(scene.model_path, opt.iterations, budget)
+
+
+def measure_render_fps(scene, gaussians, pipe, background, train_test_exp, separate_sh, max_frames=30):
+    cameras = scene.getTestCameras() or scene.getTrainCameras()
+    if not cameras:
+        return None
+    cameras = cameras[:max_frames]
+    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    start = time.perf_counter()
+    with torch.no_grad():
+        for viewpoint in cameras:
+            render(viewpoint, gaussians, pipe, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)["render"]
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    elapsed = time.perf_counter() - start
+    if elapsed <= 0.0:
+        return None
+    return len(cameras) / elapsed
+
+
+def write_budget_report(model_path, iteration, budget):
+    os.makedirs(model_path, exist_ok=True)
+    report = {"iteration": iteration, **budget}
+    report_path = os.path.join(model_path, "optimization_budget.json")
+    with open(report_path, "w") as budget_f:
+        json.dump(report, budget_f, indent=2, sort_keys=True)
+    print(f"[BUDGET] Saved optimization budget to {report_path}: {report}")
 
 def prepare_output_and_logger(args):    
     if not args.model_path:
