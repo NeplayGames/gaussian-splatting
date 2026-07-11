@@ -84,6 +84,11 @@ Enabling the `--train_test_exp` option includes the left half of the test images
 
 ![noexposure/exposure](assets/Exposure_comparison.png)
 
+
+## Fixed optimization budgets
+
+SEGS++ comparisons should report quality-versus-cost Pareto curves instead of selecting the maximum PSNR from mismatched runs. Evaluate every method at matched budgets for iterations, wall-clock training time, Gaussian count, model-file size, GPU memory, and rendering frame-rate requirements. See the [optimization budget evaluation protocol](docs/optimization_budget_protocol.md) for the required metrics, metadata, and example fixed-budget claims.
+
 ## Training times comparisons
 
 We report the training times with all features enabled using the original 3dgs rasterizer *(baseline)* and the accelerated rasterizer with default optimizer then sparse adam.
