@@ -1,5 +1,13 @@
 import os
+
 import pandas as pd
+
+try:
+    import torch
+except ImportError:  # pragma: no cover - budget logging still works without torch
+    torch = None
+
+
 def fmt(v, precision=4):
     if v is None:
         return "NA"
@@ -7,10 +15,41 @@ def fmt(v, precision=4):
         v = v.item()
     return f"{v:.{precision}f}"
 
+
+def collect_optimization_budget(model_path, gaussians=None, render_fps=None):
+    """Collect cost metadata for fixed-budget SEGS++ comparisons."""
+    point_cloud_path = os.path.join(model_path, "point_cloud", "iteration_*", "point_cloud.ply")
+    model_file_size_bytes = None
+    try:
+        import glob
+        candidates = glob.glob(point_cloud_path)
+        if candidates:
+            latest = max(candidates, key=os.path.getmtime)
+            model_file_size_bytes = os.path.getsize(latest)
+    except OSError:
+        model_file_size_bytes = None
+
+    gaussian_count = None
+    if gaussians is not None and hasattr(gaussians, "get_xyz"):
+        gaussian_count = int(gaussians.get_xyz.shape[0])
+
+    peak_gpu_memory_bytes = None
+    if torch is not None and torch.cuda.is_available():
+        peak_gpu_memory_bytes = int(torch.cuda.max_memory_allocated())
+
+    return {
+        "gaussian_count": gaussian_count,
+        "model_file_size_bytes": model_file_size_bytes,
+        "peak_gpu_memory_bytes": peak_gpu_memory_bytes,
+        "render_fps": render_fps,
+    }
+
+
 def log_metrics_to_excel(iteration, metrics, model_path,
                          lambda_edge=0.0, lambda_saliency=0.0,
                             use_edge=False, use_saliency=False,
-                         excel_path="results.xlsx", use_method = "Saliency",total_Time = 0):
+                         excel_path="results.xlsx", use_method = "Saliency",total_Time = 0,
+                         budget=None):
     """
     Append metrics + config info to Excel file, create if not exists.
 
@@ -43,8 +82,19 @@ def log_metrics_to_excel(iteration, metrics, model_path,
         "use_edge": use_edge,
         "use_saliency": use_saliency,
         "Saliency_name":use_method,
-        "Total_Time": total_Time
+        "Total_Time": total_Time,
+        "gaussian_count": None,
+        "model_file_size_bytes": None,
+        "peak_gpu_memory_bytes": None,
+        "render_fps": None
     }
+    if budget:
+        record.update({key: budget.get(key) for key in (
+            "gaussian_count",
+            "model_file_size_bytes",
+            "peak_gpu_memory_bytes",
+            "render_fps",
+        )})
 
     if os.path.exists(excel_path):
         df = pd.read_excel(excel_path)
@@ -62,6 +112,10 @@ def log_metrics_to_excel(iteration, metrics, model_path,
         f"LPIPS={fmt(record['lpips'])}, "
         f"EdgeSim={fmt(record['edge_sim'])}, "
         f"SalSim={fmt(record['saliency_sim'])}, "
-        f"λe={lambda_edge}, λs={lambda_saliency}, edge={use_edge}, saliency={use_saliency}"
+        f"λe={lambda_edge}, λs={lambda_saliency}, edge={use_edge}, saliency={use_saliency}, "
+        f"gaussians={record['gaussian_count']}, "
+        f"model_bytes={record['model_file_size_bytes']}, "
+        f"peak_gpu_bytes={record['peak_gpu_memory_bytes']}, "
+        f"render_fps={record['render_fps']}"
     )
 
