@@ -91,32 +91,69 @@ def _sample_gaussian_image_metrics(viewpoint_cam, gaussians, visibility_filter, 
     return importance, error
 
 
+SEGS_METHODS = [
+    "baseline",
+    "eggs",
+    "segs_edge_only",
+    "segs_saliency_only",
+    "segs_loss",
+    "segs_densification_only",
+    "segs_loss_and_densification",
+    "segs_curriculum",
+    "segs_full",
+    "constant_scale_control",
+    "shuffled_map_control",
+]
+
+
 def _configure_segs_method(args):
+    args.use_edge = False
+    args.use_saliency = False
+    args.adaptive_curriculum = False
+    args.segs_densification = False
+    requested_weighting_control = getattr(args, "weighting_control", False)
+    requested_shuffle_map_control = getattr(args, "shuffle_map_control", False)
+    args.weighting_control = False
+    args.shuffle_map_control = False
+
     if args.method == "baseline":
-        args.use_edge = False
-        args.use_saliency = False
-        args.adaptive_curriculum = False
-        args.segs_densification = False
-    elif args.method == "segs_loss":
+        return
+    if args.method in ("eggs", "segs_edge_only"):
+        args.use_edge = True
+    elif args.method == "segs_saliency_only":
+        args.use_saliency = True
+    elif args.method in ("segs_loss", "constant_scale_control", "shuffled_map_control"):
         args.use_edge = True
         args.use_saliency = True
-        args.adaptive_curriculum = False
-        args.segs_densification = False
+        args.weighting_control = args.method == "constant_scale_control" or requested_weighting_control
+        args.shuffle_map_control = args.method == "shuffled_map_control" or requested_shuffle_map_control
+    elif args.method == "segs_densification_only":
+        args.use_edge = True
+        args.use_saliency = True
+        args.segs_densification = True
+        args.weighting_control = requested_weighting_control
+        args.shuffle_map_control = requested_shuffle_map_control
+    elif args.method == "segs_loss_and_densification":
+        args.use_edge = True
+        args.use_saliency = True
+        args.segs_densification = True
+        args.weighting_control = requested_weighting_control
+        args.shuffle_map_control = requested_shuffle_map_control
     elif args.method == "segs_curriculum":
         args.use_edge = True
         args.use_saliency = True
         args.adaptive_curriculum = True
-        args.segs_densification = False
-    elif args.method == "segs_densification":
-        args.use_edge = True
-        args.use_saliency = True
-        args.adaptive_curriculum = False
-        args.segs_densification = True
+        args.weighting_control = requested_weighting_control
+        args.shuffle_map_control = requested_shuffle_map_control
     elif args.method == "segs_full":
         args.use_edge = True
         args.use_saliency = True
         args.adaptive_curriculum = True
         args.segs_densification = True
+        args.weighting_control = requested_weighting_control
+        args.shuffle_map_control = requested_shuffle_map_control
+    else:
+        raise ValueError(f"Unknown method: {args.method}")
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -157,9 +194,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             lambda_saliency=args.lambda_saliency,
             normalize=True,
             constant_scaling_control=args.weighting_control,
+            shuffle_map_control=getattr(args, "shuffle_map_control", False),
         )
 
-    tb_writer = prepare_output_and_logger(dataset)
+    tb_writer = prepare_output_and_logger(dataset, args)
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
@@ -230,7 +268,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
-        if combiner is not None and (args.use_edge or args.use_saliency):
+        if combiner is not None and (args.use_edge or args.use_saliency) and args.method != "segs_densification_only":
             current_lambda_edge, current_lambda_saliency = curriculum_lambda_weights(
                 iteration, opt.iterations, args.lambda_edge, args.lambda_saliency, args
             )
@@ -360,7 +398,20 @@ def write_budget_report(model_path, iteration, budget):
         json.dump(report, budget_f, indent=2, sort_keys=True)
     print(f"[BUDGET] Saved optimization budget to {report_path}: {report}")
 
-def prepare_output_and_logger(args):    
+def _runtime_metadata():
+    metadata = {}
+    try:
+        import subprocess
+        metadata["git_commit"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        metadata["git_commit"] = None
+    metadata["gpu_name"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+    metadata["cuda_version"] = torch.version.cuda
+    metadata["pytorch_version"] = torch.__version__
+    return metadata
+
+
+def prepare_output_and_logger(args, run_args=None):    
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
             unique_str=os.getenv('OAR_JOB_ID')
@@ -371,10 +422,15 @@ def prepare_output_and_logger(args):
     # Set up output folder
     print("Output folder: {}".format(args.model_path))
     os.makedirs(args.model_path, exist_ok = True)
+    metadata_args = run_args if run_args is not None else args
     with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
-        cfg_log_f.write(str(Namespace(**vars(args))))
+        cfg_log_f.write(str(Namespace(**vars(metadata_args))))
+    with open(os.path.join(args.model_path, "cfg_args.json"), 'w') as cfg_json_f:
+        json.dump(vars(metadata_args), cfg_json_f, indent=2, sort_keys=True)
+    with open(os.path.join(args.model_path, "runtime_metadata.json"), 'w') as metadata_f:
+        json.dump(_runtime_metadata(), metadata_f, indent=2, sort_keys=True)
     with open(os.path.join(args.model_path, "seed.txt"), 'w') as seed_f:
-        seed_f.write(str(getattr(args, "seed", 0)))
+        seed_f.write(str(getattr(metadata_args, "seed", 0)))
 
     # Create Tensorboard writer
     tb_writer = None
@@ -441,11 +497,11 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--method", type=str, default="baseline", choices=["baseline", "segs_loss", "segs_curriculum", "segs_densification", "segs_full"])
+    parser.add_argument("--method", type=str, default="baseline", choices=SEGS_METHODS)
     parser.add_argument("--use_edge", action="store_true", default=False)
     parser.add_argument("--use_saliency", action="store_true", default=False)
     parser.add_argument("--edge_name", type=str, default="sobel", choices=["sobel"])
-    parser.add_argument("--saliency_name", type=str, default="Boolean", choices=["Boolean", "itti"])
+    parser.add_argument("--saliency_name", type=str, default="BooleanMapApprox", choices=["BooleanMapApprox", "IntensityCenterSurround", "Boolean", "itti"])
     parser.add_argument("--lambda_edge", type=float, default=0.2)
     parser.add_argument("--lambda_saliency", type=float, default=0.1)
     parser.add_argument("--adaptive_curriculum", action="store_true", default=False)
@@ -456,6 +512,7 @@ if __name__ == "__main__":
     parser.add_argument("--curriculum_final_decay_start", type=float, default=0.90)
     parser.add_argument("--curriculum_final_weight_floor", type=float, default=0.50)
     parser.add_argument("--weighting_control", action="store_true", default=False)
+    parser.add_argument("--shuffle_map_control", action="store_true", default=False)
     parser.add_argument("--segs_densification", action="store_true", default=False)
     parser.add_argument("--segs_importance_power", type=float, default=1.0)
     parser.add_argument("--segs_error_power", type=float, default=1.0)
