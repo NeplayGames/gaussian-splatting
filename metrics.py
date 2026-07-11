@@ -16,9 +16,17 @@ import torch
 import torchvision
 from tqdm import tqdm
 
-from lpipsPyTorch import lpips
+import lpips
 from utils.image_utils import psnr
 from utils.loss_utils import ssim
+
+_lpips_model = None
+
+def lpips_distance(render, gt):
+    global _lpips_model
+    if _lpips_model is None:
+        _lpips_model = lpips.LPIPS(net="vgg").cuda().eval()
+    return _lpips_model(render * 2.0 - 1.0, gt * 2.0 - 1.0)
 
 
 def read_images(render_dir, gt_dir):
@@ -47,7 +55,7 @@ def evaluate_split(model_path, split_dir):
         gt = gt.unsqueeze(0)
         ssims.append(ssim(render, gt).mean().double())
         psnrs.append(psnr(render, gt).mean().double())
-        lpipss.append(lpips(render, gt, net_type="vgg").mean().double())
+        lpipss.append(lpips_distance(render, gt).mean().double())
 
     return {
         "SSIM": torch.tensor(ssims).mean().item(),

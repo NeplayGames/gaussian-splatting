@@ -387,12 +387,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     write_budget_report(scene.model_path, opt.iterations, budget)
 
 
-def measure_render_fps(scene, gaussians, pipe, background, train_test_exp, separate_sh, max_frames=30):
+def measure_render_fps(scene, gaussians, pipe, background, train_test_exp, separate_sh, max_frames=30, warmup_frames=3):
     cameras = scene.getTestCameras() or scene.getTrainCameras()
     if not cameras:
         return None
     cameras = cameras[:max_frames]
     torch.cuda.empty_cache()
+    with torch.no_grad():
+        for viewpoint in cameras[:warmup_frames]:
+            render(viewpoint, gaussians, pipe, background, use_trained_exp=train_test_exp, separate_sh=separate_sh)["render"]
     if torch.cuda.is_available():
         torch.cuda.synchronize()
     start = time.perf_counter()

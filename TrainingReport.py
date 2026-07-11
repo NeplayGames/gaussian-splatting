@@ -41,7 +41,10 @@ def collect_optimization_budget(model_path, gaussians=None, render_fps=None):
         "gaussian_count": gaussian_count,
         "model_file_size_bytes": model_file_size_bytes,
         "peak_gpu_memory_bytes": peak_gpu_memory_bytes,
+        "peak_gpu_memory_allocated_bytes": peak_gpu_memory_bytes,
+        "point_cloud_file_size_bytes": model_file_size_bytes,
         "render_fps": render_fps,
+        "render_fps_recorded_during_training": render_fps,
     }
 
 

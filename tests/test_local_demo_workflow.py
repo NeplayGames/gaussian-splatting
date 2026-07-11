@@ -37,3 +37,31 @@ def test_resume_behavior_skips_success(tmp_path):
     log=tmp_path/'logs'; log.mkdir()
     (log/'step_status.json').write_text(json.dumps({'status':'success'}))
     assert run_command(['python','-c','raise SystemExit(9)'], log, 'step', resume=True) == 'skipped'
+
+
+def test_resume_success_requires_expected_artifacts(tmp_path):
+    log=tmp_path/'logs'; log.mkdir()
+    artifact=tmp_path/'artifact.txt'
+    (log/'step_status.json').write_text(json.dumps({'status':'success'}))
+    assert run_command(['python','-c',f"from pathlib import Path; Path(r'{artifact}').write_text('ok')"], log, 'step', resume=True, expected_artifacts=[artifact]) == 'success'
+    assert artifact.read_text() == 'ok'
+    assert run_command(['python','-c','raise SystemExit(9)'], log, 'step', resume=True, expected_artifacts=[artifact]) == 'skipped'
+
+
+def test_demo_record_uses_budget_not_render_elapsed_or_model_directory_size(tmp_path):
+    from tools.demo_runner import _budget_value
+    model=tmp_path/'m'; ply=model/'point_cloud'/'iteration_1000'/'point_cloud.ply'; ply.parent.mkdir(parents=True)
+    ply.write_text('ply\nelement vertex 7\nend_header\n')
+    render=(model/'test'/'ours_1000'/'renders'); render.mkdir(parents=True)
+    (render/'00000.png').write_bytes(b'x')
+    (model/'metrics.json').write_text(json.dumps({'test/ours_1000': {'PSNR': 1, 'SSIM': 2, 'LPIPS': 3}}))
+    budget={'peak_gpu_memory_bytes': 123, 'model_file_size_bytes': 456, 'render_fps': 78.9}
+    assert _budget_value(budget, 'peak_gpu_memory_bytes') == 123
+    assert _budget_value(budget, 'model_file_size_bytes') == 456
+    assert _budget_value(budget, 'render_fps') == 78.9
+
+
+def test_metrics_uses_installed_lpips_package():
+    source=Path('metrics.py').read_text()
+    assert 'import lpips' in source
+    assert 'from lpipsPyTorch import lpips' not in source
