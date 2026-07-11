@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from .SaliencyAbstract import SaliencyAbs
 
 
-class Itti(SaliencyAbs):
+class IntensityCenterSurround(SaliencyAbs):
     def __init__(self, num_scales=6, device="cuda"):
         self.num_scales = num_scales
         self.device = device
@@ -69,3 +69,7 @@ class Itti(SaliencyAbs):
         cos_sim = self.saliency_similarity(image, gt_image)
         cos_sim_01 = 0.5 * (cos_sim + 1.0)
         return 1.0 - cos_sim_01
+
+
+# Backward-compatible alias for existing checkpoints/scripts.
+Itti = IntensityCenterSurround

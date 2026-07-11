@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .SaliencyAbstract import SaliencyAbs
 
-class BooleanMap(SaliencyAbs, nn.Module):
+class BooleanMapApprox(SaliencyAbs, nn.Module):
     def __init__(self, num_thresholds=8, device="cuda"):
         super().__init__()
         self.num_thresholds = num_thresholds
@@ -67,3 +67,7 @@ class BooleanMap(SaliencyAbs, nn.Module):
 
     def saliency_loss(self, image, gt_image):
         return (1.0 - self.saliency_similarity(image, gt_image)) * 0.5
+
+
+# Backward-compatible alias for existing checkpoints/scripts.
+BooleanMap = BooleanMapApprox

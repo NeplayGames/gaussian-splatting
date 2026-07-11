@@ -3,114 +3,153 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
-# under the terms of the LICENSE.md file.
-#
-# For inquiries contact  george.drettakis@inria.fr
-#
 
+import json
 import os
-from argparse import ArgumentParser
+import subprocess
+import sys
 import time
+from argparse import ArgumentParser
+from pathlib import Path
 
-mipnerf360_outdoor_scenes = ["bicycle", "flowers", "garden", "stump", "treehill"]
-mipnerf360_indoor_scenes = ["room", "counter", "kitchen", "bonsai"]
-tanks_and_temples_scenes = ["truck", "train"]
-deep_blending_scenes = ["drjohnson", "playroom"]
+METHODS = [
+    "baseline",
+    "eggs",
+    "segs_edge_only",
+    "segs_saliency_only",
+    "segs_loss",
+    "segs_densification_only",
+    "segs_loss_and_densification",
+    "segs_curriculum",
+    "segs_full",
+    "constant_scale_control",
+    "shuffled_map_control",
+]
 
-parser = ArgumentParser(description="Full evaluation script parameters")
-parser.add_argument("--skip_training", action="store_true")
-parser.add_argument("--skip_rendering", action="store_true")
-parser.add_argument("--skip_metrics", action="store_true")
-parser.add_argument("--output_path", default="./eval")
-parser.add_argument("--use_depth", action="store_true")
-parser.add_argument("--use_expcomp", action="store_true")
-parser.add_argument("--fast", action="store_true")
-parser.add_argument("--aa", action="store_true")
-parser.add_argument("--method", type=str, default="baseline", choices=["baseline", "segs_loss", "segs_curriculum", "segs_densification", "segs_full"])
-parser.add_argument("--seed", type=int, default=0)
+DATASETS = {
+    "m360": {
+        "root_arg": "mipnerf360",
+        "scenes": [("bicycle", "images_4"), ("flowers", "images_4"), ("garden", "images_4"), ("stump", "images_4"), ("treehill", "images_4"),
+                   ("room", "images_2"), ("counter", "images_2"), ("kitchen", "images_2"), ("bonsai", "images_2")],
+    },
+    "tandt": {"root_arg": "tanksandtemples", "scenes": [("truck", None), ("train", None)]},
+    "db": {"root_arg": "deepblending", "scenes": [("drjohnson", None), ("playroom", None)]},
+}
 
 
+def parse_csv(value, cast=str):
+    return [cast(item) for item in value.split(",") if item]
 
 
-args, _ = parser.parse_known_args()
-m360_timing = tandt_timing = db_timing = 0.0
+def run_step(command, run_dir, step_name, resume=False):
+    run_dir.mkdir(parents=True, exist_ok=True)
+    status_path = run_dir / f"{step_name}_status.json"
+    if resume and status_path.exists():
+        try:
+            if json.loads(status_path.read_text()).get("status") == "success":
+                return "skipped"
+        except json.JSONDecodeError:
+            pass
+    started = time.time()
+    with (run_dir / f"{step_name}.stdout.log").open("w") as stdout_f, (run_dir / f"{step_name}.stderr.log").open("w") as stderr_f:
+        try:
+            subprocess.run(command, check=True, stdout=stdout_f, stderr=stderr_f)
+        except subprocess.CalledProcessError as exc:
+            status = {"status": "failed", "returncode": exc.returncode, "command": command, "elapsed_seconds": time.time() - started}
+            status_path.write_text(json.dumps(status, indent=2))
+            raise
+    status = {"status": "success", "returncode": 0, "command": command, "elapsed_seconds": time.time() - started}
+    status_path.write_text(json.dumps(status, indent=2))
+    return "success"
 
-all_scenes = []
-all_scenes.extend(mipnerf360_outdoor_scenes)
-all_scenes.extend(mipnerf360_indoor_scenes)
-all_scenes.extend(tanks_and_temples_scenes)
-all_scenes.extend(deep_blending_scenes)
 
-if not args.skip_training or not args.skip_rendering:
-    parser.add_argument('--mipnerf360', "-m360", required=True, type=str)
-    parser.add_argument("--tanksandtemples", "-tat", required=True, type=str)
-    parser.add_argument("--deepblending", "-db", required=True, type=str)
+def main():
+    parser = ArgumentParser(description="Full evaluation script parameters")
+    parser.add_argument("--skip_training", action="store_true")
+    parser.add_argument("--skip_rendering", action="store_true")
+    parser.add_argument("--skip_metrics", action="store_true")
+    parser.add_argument("--resume", action="store_true", help="Skip steps whose per-run status file is already successful.")
+    parser.add_argument("--output_path", default="./eval")
+    parser.add_argument("--use_depth", action="store_true")
+    parser.add_argument("--use_expcomp", action="store_true")
+    parser.add_argument("--fast", action="store_true")
+    parser.add_argument("--aa", action="store_true")
+    parser.add_argument("--method", type=str, default="baseline", choices=METHODS)
+    parser.add_argument("--methods", type=str, default=None, help="Comma-separated method list; overrides --method.")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seeds", type=str, default=None, help="Comma-separated seed list; overrides --seed.")
+    parser.add_argument("--weighting_control", action="store_true")
+    parser.add_argument("--shuffle_map_control", action="store_true")
+    parser.add_argument("--saliency_name", type=str, default=None)
+    parser.add_argument("--mipnerf360", "-m360", type=str)
+    parser.add_argument("--tanksandtemples", "-tat", type=str)
+    parser.add_argument("--deepblending", "-db", type=str)
     args = parser.parse_args()
-if not args.skip_training:
-    common_args = f" --disable_viewer --quiet --eval --test_iterations -1 --method {args.method} --seed {args.seed} "
-    
-    if args.aa:
-        common_args += " --antialiasing "
-    if args.use_depth:
-        common_args += " -d depths2/ "
 
-    if args.use_expcomp:
-        common_args += " --exposure_lr_init 0.001 --exposure_lr_final 0.0001 --exposure_lr_delay_steps 5000 --exposure_lr_delay_mult 0.001 --train_test_exp "
+    methods = parse_csv(args.methods) if args.methods else [args.method]
+    seeds = parse_csv(args.seeds, int) if args.seeds else [args.seed]
+    output_root = Path(args.output_path)
+    output_root.mkdir(parents=True, exist_ok=True)
+    index_path = output_root / "result_index.jsonl"
 
-    if args.fast:
-        common_args += " --optimizer_type sparse_adam "
+    need_sources = not args.skip_training or not args.skip_rendering
+    if need_sources:
+        missing = [spec["root_arg"] for spec in DATASETS.values() if getattr(args, spec["root_arg"]) is None]
+        if missing:
+            parser.error("Required dataset roots missing: " + ", ".join(missing))
 
-    start_time = time.time()
-    for scene in mipnerf360_outdoor_scenes:
-        source = args.mipnerf360 + "/" + scene
-        os.system("python train.py -s " + source + " -i images_4 -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
-    for scene in mipnerf360_indoor_scenes:
-        source = args.mipnerf360 + "/" + scene
-        os.system("python train.py -s " + source + " -i images_2 -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
-    m360_timing = (time.time() - start_time)/60.0
+    results = []
+    for method in methods:
+        if method not in METHODS:
+            raise ValueError(f"Unknown method: {method}")
+        for seed in seeds:
+            model_root = output_root / f"{method}_seed{seed}"
+            scenes_for_metrics = []
+            for dataset_name, spec in DATASETS.items():
+                dataset_root = getattr(args, spec["root_arg"])
+                for scene, image_dir in spec["scenes"]:
+                    run_dir = model_root / scene
+                    scenes_for_metrics.append(str(run_dir))
+                    source = str(Path(dataset_root) / scene) if dataset_root else None
+                    if not args.skip_training:
+                        cmd = [sys.executable, "train.py", "-s", source, "-m", str(run_dir), "--disable_viewer", "--quiet", "--eval", "--test_iterations", "-1", "--method", method, "--seed", str(seed)]
+                        if image_dir:
+                            cmd.extend(["-i", image_dir])
+                        if args.aa:
+                            cmd.append("--antialiasing")
+                        if args.use_depth:
+                            cmd.extend(["-d", "depths2/"])
+                        if args.use_expcomp:
+                            cmd.extend(["--exposure_lr_init", "0.001", "--exposure_lr_final", "0.0001", "--exposure_lr_delay_steps", "5000", "--exposure_lr_delay_mult", "0.001", "--train_test_exp"])
+                        if args.fast:
+                            cmd.extend(["--optimizer_type", "sparse_adam"])
+                        if args.weighting_control:
+                            cmd.append("--weighting_control")
+                        if args.shuffle_map_control:
+                            cmd.append("--shuffle_map_control")
+                        if args.saliency_name:
+                            cmd.extend(["--saliency_name", args.saliency_name])
+                        status = run_step(cmd, run_dir, "train", args.resume)
+                        results.append({"method": method, "seed": seed, "dataset": dataset_name, "scene": scene, "step": "train", "status": status})
+                    if not args.skip_rendering:
+                        for iteration in (7000, 30000):
+                            cmd = [sys.executable, "render.py", "--iteration", str(iteration), "-s", source, "-m", str(run_dir), "--quiet", "--eval", "--skip_train"]
+                            if args.aa:
+                                cmd.append("--antialiasing")
+                            if args.use_expcomp:
+                                cmd.append("--train_test_exp")
+                            status = run_step(cmd, run_dir, f"render_{iteration}", args.resume)
+                            results.append({"method": method, "seed": seed, "dataset": dataset_name, "scene": scene, "step": f"render_{iteration}", "status": status})
+            if not args.skip_metrics:
+                metrics_dir = model_root / "_metrics"
+                status = run_step([sys.executable, "metrics.py", "-m", *scenes_for_metrics], metrics_dir, "metrics", args.resume)
+                results.append({"method": method, "seed": seed, "step": "metrics", "status": status})
 
-    start_time = time.time()
-    for scene in tanks_and_temples_scenes:
-        source = args.tanksandtemples + "/" + scene
-        os.system("python train.py -s " + source + " -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
-    tandt_timing = (time.time() - start_time)/60.0
+    with index_path.open("a") as index_f:
+        for result in results:
+            result["timestamp"] = time.time()
+            index_f.write(json.dumps(result, sort_keys=True) + "\n")
 
-    start_time = time.time()
-    for scene in deep_blending_scenes:
-        source = args.deepblending + "/" + scene
-        os.system("python train.py -s " + source + " -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
-    db_timing = (time.time() - start_time)/60.0
 
-os.makedirs(args.output_path, exist_ok=True)
-with open(os.path.join(args.output_path,"timing.txt"), 'w') as file:
-    file.write(f"m360: {m360_timing} minutes \n tandt: {tandt_timing} minutes \n db: {db_timing} minutes\n")
-
-if not args.skip_rendering:
-    all_sources = []
-    for scene in mipnerf360_outdoor_scenes:
-        all_sources.append(args.mipnerf360 + "/" + scene)
-    for scene in mipnerf360_indoor_scenes:
-        all_sources.append(args.mipnerf360 + "/" + scene)
-    for scene in tanks_and_temples_scenes:
-        all_sources.append(args.tanksandtemples + "/" + scene)
-    for scene in deep_blending_scenes:
-        all_sources.append(args.deepblending + "/" + scene)
-    
-    common_args = " --quiet --eval --skip_train"
-    
-    if args.aa:
-        common_args += " --antialiasing "
-    if args.use_expcomp:
-        common_args += " --train_test_exp "
-
-    for scene, source in zip(all_scenes, all_sources):
-        os.system("python render.py --iteration 7000 -s " + source + " -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
-        os.system("python render.py --iteration 30000 -s " + source + " -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
-
-if not args.skip_metrics:
-    scenes_string = ""
-    for scene in all_scenes:
-        scenes_string += "\"" + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + "\" "
-
-    os.system("python metrics.py -m " + scenes_string)
+if __name__ == "__main__":
+    main()

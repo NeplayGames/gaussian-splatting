@@ -37,6 +37,7 @@ class LossCombiner:
         normalize=True,
         lam_dssim=0.2,
         constant_scaling_control=False,
+        shuffle_map_control=False,
     ):
         self.edge_cls = edge_cls
         self.saliency_cls = saliency_cls
@@ -47,6 +48,7 @@ class LossCombiner:
         self.normalize = normalize
         self.lam_dssim = lam_dssim
         self.constant_scaling_control = constant_scaling_control
+        self.shuffle_map_control = shuffle_map_control
 
     def _weight_mean(self, weight):
         """Return the per-image spatial mean of a completed weight map."""
@@ -96,6 +98,13 @@ class LossCombiner:
         saliency_map = self._saliency_indicator(gt_image)
         if saliency_map is not None:
             weight = weight + self.lambda_saliency * saliency_map.to(device=gt_image.device, dtype=gt_image.dtype)
+
+        if self.shuffle_map_control:
+            flat = weight.flatten(start_dim=2)
+            shuffled = torch.empty_like(flat)
+            for batch_idx in range(flat.shape[0]):
+                shuffled[batch_idx] = flat[batch_idx, :, torch.randperm(flat.shape[-1], device=flat.device)]
+            weight = shuffled.view_as(weight)
 
         return weight
 
