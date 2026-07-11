@@ -4,7 +4,7 @@ try:
     import yaml
 except Exception:
     yaml=None
-from .asset_manager import load_manifest, ensure_cache, download_asset, extract_dataset_asset, resolve_scene_root, validate_dataset_entry, validate_manifest, AssetError
+from .asset_manager import load_manifest, ensure_cache, download_asset, extract_dataset_asset, resolve_scene_root, validate_dataset_entry, validate_manifest, AssetError, prepare_model_assets, get_model_entry
 from .environment_check import collect_environment
 from .demo_runner import run_demo
 from .result_loader import write_results, format_table
@@ -45,6 +45,21 @@ def prepare_dataset_asset(config, manifest, cache, offline=False, force_download
         records.append(validate_scene_root(scene_root, entry.get('name','dataset'), scene_labels.get(scene, scene), entry.get('url',''), entry.get('sha256',''), entry.get('size_bytes',0), manifest.get('manifest_version','')))
     return entry, dataset_root, scene_roots, records
 
+def _fmt_size(n):
+    n=int(n)
+    for unit in ('B','KiB','MiB','GiB'):
+        if n < 1024 or unit == 'GiB': return f"{n:.1f} {unit}" if unit!='B' else f"{n} B"
+        n/=1024
+
+def print_model_summary(config, manifest, cache, model_paths):
+    print('\nVerified pretrained models')
+    print(f"{'Scene':<11} {'Method':<12} {'Version':<18} {'Size':<12} Cache path")
+    for (scene, method), path in model_paths.items():
+        entry=get_model_entry(manifest, scene, method, config.get('seed',0), config.get('iteration',30000), validate=False)
+        print(f"{scene:<11} {method:<12} {entry['version']:<18} {_fmt_size(entry['size_bytes']):<12} {Path(path).resolve()}")
+    print(f"\nArchives cache:\n{(Path(cache)/'downloads').resolve()}")
+    print(f"\nModels cache:\n{(Path(cache)/'models').resolve()}")
+
 def main(argv=None):
     p=argparse.ArgumentParser(description='Run the local SEGS quick-start demonstration.')
     p.add_argument('--check-only', action='store_true'); p.add_argument('--download-only', action='store_true')
@@ -58,7 +73,9 @@ def main(argv=None):
     cfg=load_config();
     if args.cache_dir: cfg['cache_dir']=args.cache_dir
     if args.output_dir: cfg['output_dir']=args.output_dir
-    if args.scenes: cfg['scenes']=[s for s in cfg['scenes'] if s['scene'] in parse_csv(args.scenes)]
+    if args.scenes:
+        requested=parse_csv(args.scenes)
+        cfg['scenes']=[{'scene': s} for s in requested]
     if args.methods: cfg['methods']=parse_csv(args.methods)
     out=Path(cfg['output_dir'])
     if args.clean_output and out.exists(): shutil.rmtree(out)
@@ -69,14 +86,14 @@ def main(argv=None):
     if args.check_only:
         print('Environment check complete.'); return 0 if not problems else 2
     manifest=load_manifest(); cache=ensure_cache(cfg['cache_dir'])
-    validate_manifest(manifest, asset_scope=args.assets)
+    validate_manifest(manifest, asset_scope=args.assets, config=cfg)
     if args.download_only:
         if args.assets in ('dataset','all'):
             _, _, _, validation_records = prepare_dataset_asset(cfg, manifest, cache, offline=args.offline, force_download=args.force_download)
             write_validations(validation_records, out/'dataset_validation.json')
         if args.assets in ('models','all'):
-            for entry in manifest.get('models',[]):
-                download_asset(entry, cache, args.offline, args.force_download)
+            model_paths=prepare_model_assets(cfg, manifest, cache, offline=args.offline, force_download=args.force_download)
+            print_model_summary(cfg, manifest, cache, model_paths)
         print('Download validation complete.'); return 0
     if args.train and (args.iterations or cfg.get('iteration')) < 30000: print(DISCLAIMER)
     records=run_demo(cfg, manifest, out, train=args.train, iterations=args.iterations or cfg.get('iteration',30000))
@@ -89,4 +106,9 @@ def main(argv=None):
     report=generate_report(records, env, manifest, out, open_browser=(cfg.get('report',{}).get('open_browser',True) and not args.no_open))
     print(format_table(records)); print(); print((out/'results.csv').resolve()); print(report.resolve())
     return 0
-if __name__ == '__main__': raise SystemExit(main())
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except AssetError as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(2)
