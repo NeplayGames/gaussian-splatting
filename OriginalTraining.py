@@ -10,6 +10,7 @@
 #
 
 import os
+import math
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
@@ -72,6 +73,48 @@ def _sample_gaussian_image_metrics(viewpoint_cam, gaussians, visibility_filter, 
     importance = F.grid_sample(importance_map, grid, align_corners=True, padding_mode="border").view(-1)
     error = F.grid_sample(error_map, grid, align_corners=True, padding_mode="border").view(-1)
     return importance, error
+
+
+def _sigmoid(x):
+    if x >= 0:
+        z = math.exp(-x)
+        return 1.0 / (1.0 + z)
+    z = math.exp(x)
+    return z / (1.0 + z)
+
+
+def curriculum_lambda_weights(iteration, total_iterations, alpha_max, beta_max, args):
+    """Return scheduled edge/saliency weights for the adaptive SEGS curriculum.
+
+    The schedule keeps early optimization close to standard photometric 3DGS,
+    ramps edge guidance once coarse geometry starts forming, introduces saliency
+    later with a sigmoid ramp, and optionally decays both terms near the end to
+    stabilize global image quality.
+    """
+    if not getattr(args, "adaptive_curriculum", False):
+        return alpha_max, beta_max
+
+    total_iterations = max(int(total_iterations), 1)
+    t = max(float(iteration), 0.0)
+
+    edge_delay = float(args.curriculum_edge_delay) * total_iterations
+    edge_tau = max(float(args.curriculum_edge_tau) * total_iterations, 1.0)
+    edge_t = max(t - edge_delay, 0.0)
+    alpha = alpha_max * (1.0 - math.exp(-edge_t / edge_tau))
+
+    saliency_midpoint = float(args.curriculum_saliency_start) * total_iterations
+    saliency_width = max(float(args.curriculum_saliency_width) * total_iterations, 1.0)
+    beta = beta_max * _sigmoid((t - saliency_midpoint) / saliency_width)
+
+    decay_start = float(args.curriculum_final_decay_start) * total_iterations
+    if t > decay_start and decay_start < total_iterations:
+        progress = (t - decay_start) / max(total_iterations - decay_start, 1.0)
+        floor = float(args.curriculum_final_weight_floor)
+        decay = 1.0 - (1.0 - floor) * min(max(progress, 0.0), 1.0)
+        alpha *= decay
+        beta *= decay
+
+    return alpha, beta
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, edge_name, saliency_name, args):
 
@@ -197,6 +240,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
+        current_lambda_edge, current_lambda_saliency = curriculum_lambda_weights(
+            iteration, opt.iterations, args.lambda_edge, args.lambda_saliency, args
+        )
+        combiner.lambda_edge = current_lambda_edge
+        combiner.lambda_saliency = current_lambda_saliency
         Ll1 = combiner.compute_loss(image, gt_image)
 
         if FUSED_SSIM_AVAILABLE:
@@ -229,8 +277,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             ema_Ll1depth_for_log = 0.4 * Ll1depth + 0.6 * ema_Ll1depth_for_log
 
+            if tb_writer and getattr(args, "adaptive_curriculum", False):
+                tb_writer.add_scalar('train_loss_patches/lambda_edge_curriculum', current_lambda_edge, iteration)
+                tb_writer.add_scalar('train_loss_patches/lambda_saliency_curriculum', current_lambda_saliency, iteration)
+
             if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "Depth Loss": f"{ema_Ll1depth_for_log:.{7}f}"})
+                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "Depth Loss": f"{ema_Ll1depth_for_log:.{7}f}", "λe": f"{current_lambda_edge:.3f}", "λs": f"{current_lambda_saliency:.3f}"})
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
@@ -584,6 +636,20 @@ if __name__ == "__main__":
                         help="Weight for edge contribution")
     parser.add_argument("--lambda_saliency", type=float, default=0.1,
                         help="Weight for saliency contribution")
+    parser.add_argument("--adaptive_curriculum", action="store_true", default=False,
+                        help="Ramp edge/saliency loss weights over training instead of using fixed lambdas")
+    parser.add_argument("--curriculum_edge_delay", type=float, default=0.05,
+                        help="Fraction of training before edge ramp starts")
+    parser.add_argument("--curriculum_edge_tau", type=float, default=0.18,
+                        help="Exponential time constant, as a fraction of training, for edge ramp")
+    parser.add_argument("--curriculum_saliency_start", type=float, default=0.55,
+                        help="Training fraction at the midpoint of the saliency sigmoid ramp")
+    parser.add_argument("--curriculum_saliency_width", type=float, default=0.08,
+                        help="Sigmoid width, as a fraction of training, for saliency ramp")
+    parser.add_argument("--curriculum_final_decay_start", type=float, default=0.90,
+                        help="Training fraction where final stabilizing decay begins")
+    parser.add_argument("--curriculum_final_weight_floor", type=float, default=0.50,
+                        help="Fraction of ramped weights retained at the final iteration")
     parser.add_argument("--weighting_control", action="store_true", default=False,
                         help="Use L_control = c * L_3DGS, where c is the mean of the unnormalized edge/saliency weight map")
     parser.add_argument("--segs_densification", action="store_true", default=False,
