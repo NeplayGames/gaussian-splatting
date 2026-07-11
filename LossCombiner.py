@@ -36,6 +36,7 @@ class LossCombiner:
         lambda_saliency=0.1,
         normalize=True,
         lam_dssim=0.2,
+        constant_scaling_control=False,
     ):
         self.edge_cls = edge_cls
         self.saliency_cls = saliency_cls
@@ -45,13 +46,18 @@ class LossCombiner:
         self.lambda_saliency = lambda_saliency
         self.normalize = normalize
         self.lam_dssim = lam_dssim
+        self.constant_scaling_control = constant_scaling_control
+
+    def _weight_mean(self, weight):
+        """Return the per-image spatial mean of a completed weight map."""
+        reduce_dims = tuple(range(1, weight.dim()))
+        return weight.mean(dim=reduce_dims, keepdim=True).detach()
 
     def _normalize_weight(self, weight):
         """Normalize a completed spatial weight map to mean one."""
         if not self.normalize:
             return weight
-        reduce_dims = tuple(range(1, weight.dim()))
-        mean = weight.mean(dim=reduce_dims, keepdim=True).detach()
+        mean = self._weight_mean(weight)
         return weight / (mean + 1e-8)
 
     def _edge_indicator(self, gt_image):
@@ -72,11 +78,10 @@ class LossCombiner:
             return None
         return self.saliency_cls.get_saliency_map(gt_image)
 
-    def compute_phi(self, gt_image):
+    def compute_raw_weight(self, gt_image):
         """
-        Build the normalized SEGS spatial weight map:
+        Build the unnormalized SEGS spatial weight map:
             w(u,v) = 1 + alpha E(u,v) + beta S(u,v)
-            w_hat(u,v) = w(u,v) / (mean(w) + eps)
 
         Output shape: [B, 1, H, W].
         """
@@ -92,7 +97,17 @@ class LossCombiner:
         if saliency_map is not None:
             weight = weight + self.lambda_saliency * saliency_map.to(device=gt_image.device, dtype=gt_image.dtype)
 
-        return self._normalize_weight(weight)
+        return weight
+
+    def compute_phi(self, gt_image):
+        """
+        Build the normalized SEGS spatial weight map:
+            w(u,v) = 1 + alpha E(u,v) + beta S(u,v)
+            w_hat(u,v) = w(u,v) / (mean(w) + eps)
+
+        Output shape: [B, 1, H, W] with per-image spatial mean equal to one.
+        """
+        return self._normalize_weight(self.compute_raw_weight(gt_image))
 
     def compute_loss(self, pred, gt):
         """
@@ -103,7 +118,20 @@ class LossCombiner:
         pred = _as_batched_image(pred)
         gt = _as_batched_image(gt)
 
-        phi = self.compute_phi(gt) if (self.use_edge or self.use_saliency) else None
+        if self.use_edge or self.use_saliency:
+            raw_weight = self.compute_raw_weight(gt)
+            if self.constant_scaling_control:
+                # Control: L_control = c * L_3DGS, where c is the mean of the
+                # unnormalized map. This matches the gradient scale increase
+                # without changing where image-space gradients are directed.
+                phi = self._weight_mean(raw_weight)
+            else:
+                # Main experiment: normalize the map so weights redistribute
+                # optimization effort without changing the mean gradient scale.
+                phi = self._normalize_weight(raw_weight)
+        else:
+            phi = None
+
         l1_part = weighted_l1_loss(pred, gt, phi)
 
         if self.lam_dssim == 0:
