@@ -1,3 +1,21 @@
+# SEGS Gaussian Splatting Research Fork
+
+This repository is a SEGS research fork of 3D Gaussian Splatting. It preserves the original research runner while adding a local-only quick-start demonstration for comparing `baseline` and `segs_full` on `truck` and `drjohnson`. EGGS is not implemented; use `segs_edge_only` for the edge-only method.
+
+## Quick Start: local SEGS demo
+
+```bash
+git clone --recursive https://github.com/NeplayGames/gaussian-splatting.git
+cd gaussian-splatting
+python -m tools.quickstart
+```
+
+The demo is designed to run locally on a manually operated NVIDIA GPU machine. It checks Python, PyTorch, CUDA, the rasterizer extensions, disk space, and submodules; downloads or reuses cached datasets and pretrained models under `~/.cache/segs-demo`; renders test views; computes PSNR, SSIM, and LPIPS; measures rendering performance; writes `demo_output/results.csv`; and generates `demo_output/report.html`. Use `--offline` after assets are cached, `--no-open` for browser-free operation, `--clean-output` to reset outputs, and `--train --iterations 1000` only for reduced-budget demonstration training. Reduced-budget results are not paper results.
+
+Default scenes: Tanks and Temples `truck` and Deep Blending `drjohnson`. Default methods: `baseline` and `segs_full`. The committed manifest records expected asset metadata; maintainers must replace pending model-package checksums and hosting URLs only after local training, packaging, and checksum verification. See `docs/QUICKSTART.md`, `docs/DEMO_ASSETS.md`, `docs/TROUBLESHOOTING.md`, and `docs/LOCAL_TESTING.md`.
+
+Required hardware is a CUDA-capable NVIDIA GPU with enough VRAM for Gaussian Splatting evaluation and sufficient disk space for the dataset archive, model archives, cache, and rendered outputs. Estimated download size, disk usage, runtime, dataset attribution, model attribution, and troubleshooting details should be updated in `docs/DEMO_ASSETS.md` after the final hosted assets are available.
+
 # 3D Gaussian Splatting for Real-Time Radiance Field Rendering
 Bernhard Kerbl*, Georgios Kopanas*, Thomas Leimkühler, George Drettakis (* indicates equal contribution)<br>
 | [Webpage](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) | [Full Paper](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/3d_gaussian_splatting_high.pdf) | [Video](https://youtu.be/T_kXY43VZnk) | [Other GRAPHDECO Publications](http://www-sop.inria.fr/reves/publis/gdindex.php) | [FUNGRAPH project page](https://fungraph.inria.fr) |<br>

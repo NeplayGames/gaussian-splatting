@@ -1,0 +1,19 @@
+name: segs-demo
+channels: [pytorch, nvidia, conda-forge]
+dependencies:
+  - python=3.10
+  - pytorch=2.1
+  - torchvision=0.16
+  - pytorch-cuda=11.8
+  - numpy=1.26
+  - pillow
+  - tqdm
+  - plyfile
+  - pyyaml
+  - pip
+  - pip:
+      - lpips
+      - fused-ssim
+      - pytest
+# Tested environment must be filled by maintainers after local GPU validation.
+# Local validation target: Ubuntu 22.04, NVIDIA driver 535+, CUDA runtime 11.8, RTX-class GPU.
