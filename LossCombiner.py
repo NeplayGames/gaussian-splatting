@@ -1,18 +1,28 @@
 # LossCombiner.py
 import torch
-from utils.loss_utils import ssim, l1_loss
+from utils.loss_utils import ssim
 
-def weighted_l1_loss(pred, gt, phi=None):
+
+def _as_batched_image(image):
+    """Return image as [B, C, H, W]."""
+    if image.dim() == 3:
+        return image.unsqueeze(0)
+    if image.dim() != 4:
+        raise ValueError(f"Expected image with 3 or 4 dimensions, got {image.dim()}.")
+    return image
+
+
+def weighted_l1_loss(pred, gt, weight=None):
     """
-    pred, gt: (B, C, H, W)
-    phi: optional per-pixel weighting map (B, 1, H, W) or (B, H, W)
+    Compute mean(weight * e), where e is the per-pixel mean absolute RGB error.
+
+    pred, gt: [B, C, H, W]
+    weight: optional [B, 1, H, W] spatial weighting map
     """
-    diff = torch.abs(pred - gt)
-    if phi is not None:
-        if phi.ndim == 3:
-            phi = phi.unsqueeze(1)  # (B, 1, H, W)
-        diff = diff * phi
-    return diff.mean()
+    per_pixel_error = torch.abs(pred - gt).mean(dim=1, keepdim=True)
+    if weight is not None:
+        per_pixel_error = per_pixel_error * weight
+    return per_pixel_error.mean()
 
 
 class LossCombiner:
@@ -25,7 +35,7 @@ class LossCombiner:
         lambda_edge=0.2,
         lambda_saliency=0.1,
         normalize=True,
-        lam_dssim=0.2  # λ from original GS loss
+        lam_dssim=0.2,
     ):
         self.edge_cls = edge_cls
         self.saliency_cls = saliency_cls
@@ -34,56 +44,73 @@ class LossCombiner:
         self.lambda_edge = lambda_edge
         self.lambda_saliency = lambda_saliency
         self.normalize = normalize
-        self.lam_dssim = lam_dssim  # weight for DSSIM
+        self.lam_dssim = lam_dssim
 
-    def _normalize_map(self, x):
-        if x is None:
+    def _normalize_weight(self, weight):
+        """Normalize a completed spatial weight map to mean one."""
+        if not self.normalize:
+            return weight
+        reduce_dims = tuple(range(1, weight.dim()))
+        mean = weight.mean(dim=reduce_dims, keepdim=True).detach()
+        return weight / (mean + 1e-8)
+
+    def _edge_indicator(self, gt_image):
+        """Return raw E(u,v), not a completed Sobel phi/weight map."""
+        if not self.use_edge or self.edge_cls is None:
             return None
-        if self.normalize:
-            return x / (x.mean().detach() + 1e-8)
-        return x
+
+        # The Sobel implementation exposes primitives for the raw gradient map;
+        # prefer them over get_edge_map(), which returns 1 + beta * edge.
+        if hasattr(self.edge_cls, "rgb_to_grayscale") and hasattr(self.edge_cls, "sobel_filter"):
+            return self.edge_cls.sobel_filter(self.edge_cls.rgb_to_grayscale(gt_image))
+
+        return self.edge_cls.get_edge_map(gt_image)
+
+    def _saliency_indicator(self, gt_image):
+        """Return raw S(u,v)."""
+        if not self.use_saliency or self.saliency_cls is None:
+            return None
+        return self.saliency_cls.get_saliency_map(gt_image)
 
     def compute_phi(self, gt_image):
         """
-        Build φ(u,v) = 1 + β1 * edge + β2 * saliency
-        Output shape: (B, 1, H, W)
+        Build the normalized SEGS spatial weight map:
+            w(u,v) = 1 + alpha E(u,v) + beta S(u,v)
+            w_hat(u,v) = w(u,v) / (mean(w) + eps)
+
+        Output shape: [B, 1, H, W].
         """
-        device = gt_image.device
-        batch_size, _, H, W = gt_image.shape
+        gt_image = _as_batched_image(gt_image)
+        batch_size, _, height, width = gt_image.shape
+        weight = torch.ones((batch_size, 1, height, width), device=gt_image.device, dtype=gt_image.dtype)
 
-        phi = torch.ones((batch_size, 1, H, W), device=device)
+        edge_map = self._edge_indicator(gt_image)
+        if edge_map is not None:
+            weight = weight + self.lambda_edge * edge_map.to(device=gt_image.device, dtype=gt_image.dtype)
 
-        if self.use_edge and self.edge_cls is not None:
-            edge_map = self.edge_cls.get_edge_map(gt_image)  # (B, 1, H, W)
-            edge_map = self._normalize_map(edge_map)
-            phi += self.lambda_edge * edge_map
+        saliency_map = self._saliency_indicator(gt_image)
+        if saliency_map is not None:
+            weight = weight + self.lambda_saliency * saliency_map.to(device=gt_image.device, dtype=gt_image.dtype)
 
-        if self.use_saliency and self.saliency_cls is not None:
-            sal_map = self.saliency_cls.get_saliency_map(gt_image)  # (B, 1, H, W)
-            sal_map = self._normalize_map(sal_map)
-            phi += self.lambda_saliency * sal_map
-
-        return phi
+        return self._normalize_weight(weight)
 
     def compute_loss(self, pred, gt):
         """
-        Loss(c, im) = (1 - λ) * || φ(u,v)(c - im)
+        Compute the SEGS loss:
+            e(u,v) = (1 / C) * sum_c |pred_c(u,v) - gt_c(u,v)|
+            L_SEGS = (1 - lambda) * mean(w_hat * e) + lambda * L_DSSIM
         """
-        if not self.use_edge and not self.use_edge:
-            return l1_loss(pred, gt)
-        # Ensure pred and gt are 4D [B,C,H,W]
-        if pred.dim() == 3:
-            pred = pred.unsqueeze(0)  # [1,C,H,W]
-        if gt.dim() == 3:
-            gt = gt.unsqueeze(0)
-            # Compute φ map
-            phi = self.compute_phi(gt)
+        pred = _as_batched_image(pred)
+        gt = _as_batched_image(gt)
 
-        # Weighted L1 part
+        phi = self.compute_phi(gt) if (self.use_edge or self.use_saliency) else None
         l1_part = weighted_l1_loss(pred, gt, phi)
-        
-        total = (1 - self.lam_dssim) * l1_part 
-        return total
+
+        if self.lam_dssim == 0:
+            return l1_part
+
+        dssim_part = 1.0 - ssim(pred, gt)
+        return (1.0 - self.lam_dssim) * l1_part + self.lam_dssim * dssim_part
 
     def Get_Edge_saliency_Similarity(self, pred, gt_image):
         return self.edge_cls.edge_similarity(pred, gt_image), self.saliency_cls.saliency_similarity(pred, gt_image)
