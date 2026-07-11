@@ -114,11 +114,11 @@ class LossCombiner:
         """Return the normalized perceptual SEGS importance map used by loss and densification."""
         return self.compute_phi(gt_image)
 
-    def compute_loss(self, pred, gt):
-        """
-        Compute the SEGS loss:
-            e(u,v) = (1 / C) * sum_c |pred_c(u,v) - gt_c(u,v)|
-            L_SEGS = (1 - lambda) * mean(w_hat * e) + lambda * L_DSSIM
+    def compute_weighted_l1(self, pred, gt):
+        """Compute only the weighted L1 term used by SEGS.
+
+        DSSIM is intentionally handled by the training loop so the standard
+        3DGS L1/DSSIM blend is applied exactly once.
         """
         pred = _as_batched_image(pred)
         gt = _as_batched_image(gt)
@@ -126,24 +126,21 @@ class LossCombiner:
         if self.use_edge or self.use_saliency:
             raw_weight = self.compute_raw_weight(gt)
             if self.constant_scaling_control:
-                # Control: L_control = c * L_3DGS, where c is the mean of the
-                # unnormalized map. This matches the gradient scale increase
-                # without changing where image-space gradients are directed.
                 phi = self._weight_mean(raw_weight)
             else:
-                # Main experiment: normalize the map so weights redistribute
-                # optimization effort without changing the mean gradient scale.
                 phi = self._normalize_weight(raw_weight)
         else:
             phi = None
 
-        l1_part = weighted_l1_loss(pred, gt, phi)
+        return weighted_l1_loss(pred, gt, phi)
 
-        if self.lam_dssim == 0:
-            return l1_part
+    def compute_loss(self, pred, gt):
+        """Backward-compatible alias for the weighted L1 term.
 
-        dssim_part = 1.0 - ssim(pred, gt)
-        return (1.0 - self.lam_dssim) * l1_part + self.lam_dssim * dssim_part
+        DSSIM is intentionally handled by training loops, not by LossCombiner,
+        so callers cannot accidentally apply DSSIM twice.
+        """
+        return self.compute_weighted_l1(pred, gt)
 
     def Get_Edge_saliency_Similarity(self, pred, gt_image):
         return self.edge_cls.edge_similarity(pred, gt_image), self.saliency_cls.saliency_similarity(pred, gt_image)
