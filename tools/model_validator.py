@@ -84,10 +84,34 @@ def _validate_ply(path, expected_vertices=None):
     return vertex
 
 def directory_size(root):
+    """Return the byte size of regular, non-symlink files below root.
+
+    This intentionally mirrors the training-time model-size measurement: it sums
+    file payload bytes after extraction and excludes directory entries, symlink
+    targets, filesystem allocation overhead, and tar/gzip container metadata.
+    """
     total=0
     for p in Path(root).rglob('*'):
         if p.is_file() and not p.is_symlink(): total += p.stat().st_size
     return total
+
+def _validate_directory_size(root, recorded_size):
+    recorded=_as_int(recorded_size,'complete_model_directory_size_bytes')
+    if recorded <= 0: raise ModelValidationError('complete_model_directory_size_bytes must be positive')
+    actual=directory_size(root)
+    if actual <= 0: raise ModelValidationError('model directory size must be positive')
+    # Packaging/extraction may add or omit very small sidecar metadata such as
+    # verification markers.  Permit the larger of 4 KiB or 1% of the recorded
+    # payload size, but still require the actual extracted tree to closely match
+    # the optimization-budget measurement instead of merely being positive.
+    tolerance=max(4096, recorded//100)
+    if abs(actual-recorded) > tolerance:
+        raise ModelValidationError(
+            f"model directory size {actual} differs from optimization budget "
+            f"complete_model_directory_size_bytes {recorded} by more than "
+            f"allowed tolerance {tolerance}"
+        )
+    return actual
 
 def validate_model(root, entry):
     root=Path(root); scene=entry['scene']; method=entry['method']
@@ -120,11 +144,10 @@ def validate_model(root, entry):
     if ply.stat().st_size != _as_int(budget['point_cloud_file_size_bytes'],'point_cloud_file_size_bytes'):
         raise ModelValidationError('point cloud file size does not match optimization budget')
     _validate_ply(ply, gaussians)
-    if _as_int(budget['complete_model_directory_size_bytes'],'complete_model_directory_size_bytes') <= 0: raise ModelValidationError('complete_model_directory_size_bytes must be positive')
-    if directory_size(root) <= 0: raise ModelValidationError('model directory size must be positive')
+    actual_model_directory_size=_validate_directory_size(root, budget['complete_model_directory_size_bytes'])
     if _as_int(budget['peak_gpu_memory_allocated_bytes'],'peak_gpu_memory_allocated_bytes') < 0: raise ModelValidationError('peak GPU memory must be nonnegative')
     args=_validate_training_command(training, entry)
-    return {'root': str(root), 'scene': scene, 'method': method, 'config_hash': actual_hash, 'point_cloud_vertices': gaussians, 'training_command': args}
+    return {'root': str(root), 'scene': scene, 'method': method, 'config_hash': actual_hash, 'point_cloud_vertices': gaussians, 'model_directory_size_bytes': actual_model_directory_size, 'training_command': args}
 
 # compatibility with existing scripts/tests
 def validate_model_directory(root, scene, method):

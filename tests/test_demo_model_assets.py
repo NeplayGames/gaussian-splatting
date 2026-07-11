@@ -2,6 +2,7 @@ import json, tarfile
 from pathlib import Path
 import pytest
 from scripts.demo_model_assets import *
+from tools.model_validator import validate_model_directory as validate_strict_model_directory
 
 def test_training_matrix_generation_and_command_stability(tmp_path):
     cfg=load_training_config('truck','baseline'); validate_method_config(cfg)
@@ -25,16 +26,21 @@ def test_canonical_config_hash_is_stable():
 def synth_model(root, scene='truck', method='baseline', seed=0, iteration=30000):
     root.mkdir(parents=True); (root/'cfg_args').write_text('Namespace()')
     rc={'scene':scene,'method':method,'seed':seed,'iterations':iteration}; h=canonical_config_hash(rc); rc['config_hash']=h
-    meta={'schema_version':'demo-model-v1','dataset':'graphdeco-tandt-db-2023','scene':scene,'method':method,'seed':seed,'iterations':iteration,'training_commit':'a'*40,'upstream_commit':'b'*40,'config_hash':h,'python_version':'3','pytorch_version':'2','torchvision_version':'1','cuda_runtime_version':'12','cuda_toolkit_version':'12','nvidia_driver_version':'driver','gpu_name':'gpu','gpu_compute_capability':'8.0','operating_system':'linux','training_start_utc':'2026-07-11T00:00:00Z','training_end_utc':'2026-07-11T01:00:00Z','training_duration_seconds':1,'dataset_archive_sha256':'c'*64,'dataset_manifest_version':'v','image_count':2,'command':['python','train.py']}
-    budget={'training_duration_seconds':1,'final_gaussian_count':1,'point_cloud_file_size_bytes':10,'complete_model_directory_size_bytes':100,'peak_gpu_memory_allocated_bytes':1,'peak_gpu_memory_reserved_bytes':1,'render_fps_recorded_during_training':None,'final_iteration':iteration,'seed':seed,'method':method,'scene':scene}
-    for name,data in [('cfg_args.json',{}),('resolved_config.json',rc),('runtime_metadata.json',meta),('optimization_budget.json',budget),('training_command.json',{'command':['python','train.py']}),('load_test_status.json',{'status':'passed','iteration':iteration})]: write_json(root/name,data)
+    meta={'schema_version':'demo-model-v1','dataset':'graphdeco-tandt-db-2023','scene':scene,'method':method,'seed':seed,'iterations':iteration,'training_commit':'a'*40,'upstream_commit':'b'*40,'config_hash':h,'python_version':'3','pytorch_version':'2','torchvision_version':'1','cuda_runtime_version':'12','cuda_toolkit_version':'12','nvidia_driver_version':'driver','gpu_name':'gpu','gpu_compute_capability':'8.0','operating_system':'linux','training_start_utc':'2026-07-11T00:00:00Z','training_end_utc':'2026-07-11T01:00:00Z','training_duration_seconds':1,'dataset_archive_sha256':'c'*64,'dataset_manifest_version':'v','image_count':2,'command':['python','train.py','--eval']}
+    budget={'training_duration_seconds':1,'final_gaussian_count':1,'point_cloud_file_size_bytes':0,'complete_model_directory_size_bytes':0,'peak_gpu_memory_allocated_bytes':1,'peak_gpu_memory_reserved_bytes':1,'render_fps_recorded_during_training':None,'final_iteration':iteration,'seed':seed,'method':method,'scene':scene}
+    for name,data in [('cfg_args.json',{}),('resolved_config.json',rc),('runtime_metadata.json',meta),('optimization_budget.json',budget),('training_command.json',{'command':['python','train.py','--eval','--method',method,'--seed',seed,'--iterations',iteration,scene]}),('load_test_status.json',{'status':'passed','iteration':iteration})]: write_json(root/name,data)
     (root/'MODEL_CARD.md').write_text('model card')
-    ply=root/f'point_cloud/iteration_{iteration}/point_cloud.ply'; ply.parent.mkdir(parents=True); ply.write_text('ply\nformat ascii 1.0\nelement vertex 0\nend_header\n')
+    ply=root/f'point_cloud/iteration_{iteration}/point_cloud.ply'; ply.parent.mkdir(parents=True); ply.write_text('ply\nformat ascii 1.0\nelement vertex 1\nend_header\n')
+    budget['point_cloud_file_size_bytes']=ply.stat().st_size
+    # Re-write until the JSON file's own size contribution stabilizes.
+    for _ in range(3):
+        budget['complete_model_directory_size_bytes']=sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and not p.is_symlink())
+        write_json(root/'optimization_budget.json',budget)
     return root
 
 def test_validate_model_directory_rejects_missing_invalid_and_mismatches(tmp_path):
     root=synth_model(tmp_path/'m')
-    validate_model_directory(root,'truck','baseline')
+    validate_strict_model_directory(root,'truck','baseline')
     (root/'runtime_metadata.json').write_text('{bad')
     with pytest.raises(Exception): validate_model_directory(root,'truck','baseline')
     root=synth_model(tmp_path/'m2'); meta=read_json(root/'runtime_metadata.json'); meta['training_commit']='bad'; write_json(root/'runtime_metadata.json',meta)
@@ -68,3 +74,11 @@ def test_archive_path_traversal_and_root_rejection(tmp_path):
     with tarfile.open(bad2,'w:gz') as tf:
         p=tmp_path/'x2'; p.write_text('x'); tf.add(p, arcname='root1/file'); tf.add(p, arcname='root2/file')
     with pytest.raises(ValueError): inspect_archive(bad2,'truck','baseline')
+
+def test_validate_model_directory_rejects_directory_size_mismatch(tmp_path):
+    root=synth_model(tmp_path/'size-mismatch')
+    budget=read_json(root/'optimization_budget.json')
+    budget['complete_model_directory_size_bytes']=10_000_000
+    write_json(root/'optimization_budget.json',budget)
+    with pytest.raises(ValueError, match='model directory size'):
+        validate_strict_model_directory(root,'truck','baseline')

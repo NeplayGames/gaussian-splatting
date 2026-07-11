@@ -130,8 +130,15 @@ def download_asset(entry, cache_dir, offline=False, force=False, timeout=30):
                     f.write(chunk); downloaded+=len(chunk)
                     pct=f" ({downloaded/total*100:.1f}%)" if total else ''
                     print(f"Downloading {name}: {downloaded} bytes"+(f" / {total}" if total else '')+pct, end='\r')
-        print(); verify_file(part, entry.get('sha256'), entry.get('size_bytes')); os.replace(part, dest); return dest
-    except (HTTPError, URLError, TimeoutError, OSError, AssetError) as e: raise AssetError(f"Download failed for {name} from {url}: {e}") from e
+        print()
+        try:
+            verify_file(part, entry.get('sha256'), entry.get('size_bytes'))
+        except AssetError:
+            part.unlink(missing_ok=True)
+            raise
+        os.replace(part, dest); return dest
+    except (HTTPError, URLError, TimeoutError, OSError, AssetError) as e:
+        raise AssetError(f"Download failed for {name} from {url}: {e}") from e
 
 def _safe_zip_members(zf, dest, prefixes=None):
     dest=Path(dest).resolve(); prefixes=prefixes or []
