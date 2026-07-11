@@ -60,6 +60,8 @@ class GaussianModel:
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
+        self.importance_accum = torch.empty(0)
+        self.error_accum = torch.empty(0)
         self.optimizer = None
         self.percent_dense = 0
         self.spatial_lr_scale = 0
@@ -179,6 +181,8 @@ class GaussianModel:
         self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.importance_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.error_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
@@ -358,6 +362,8 @@ class GaussianModel:
         self._rotation = optimizable_tensors["rotation"]
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
+        self.importance_accum = self.importance_accum[valid_points_mask]
+        self.error_accum = self.error_accum[valid_points_mask]
 
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
@@ -404,13 +410,18 @@ class GaussianModel:
         self.tmp_radii = torch.cat((self.tmp_radii, new_tmp_radii))
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.importance_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.error_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-    def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
+    def densify_and_split(self, grads, grad_threshold, scene_extent, N=2, densification_scores=None):
         n_init_points = self.get_xyz.shape[0]
         # Extract points that satisfy the gradient condition
         padded_grad = torch.zeros((n_init_points), device="cuda")
-        padded_grad[:grads.shape[0]] = grads.squeeze()
+        if densification_scores is None:
+            padded_grad[:grads.shape[0]] = grads.squeeze()
+        else:
+            padded_grad[:densification_scores.shape[0]] = densification_scores.squeeze()
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
@@ -432,9 +443,10 @@ class GaussianModel:
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
-    def densify_and_clone(self, grads, grad_threshold, scene_extent):
+    def densify_and_clone(self, grads, grad_threshold, scene_extent, densification_scores=None):
         # Extract points that satisfy the gradient condition
-        selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
+        trigger = densification_scores if densification_scores is not None else torch.norm(grads, dim=-1)
+        selected_pts_mask = torch.where(trigger >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
         
@@ -449,15 +461,38 @@ class GaussianModel:
 
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii)
 
-    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, radii):
+    def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, radii, use_segs_score=False,
+                          importance_power=1.0, error_power=1.0, confidence_power=0.5, prune_score_threshold=0.0):
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
 
+        densification_scores = None
+        if use_segs_score:
+            confidence = (self.denom / (self.denom.max().clamp_min(1.0))).clamp(0.0, 1.0)
+            importance = (self.importance_accum / self.denom.clamp_min(1.0)).clamp_min(1e-6)
+            reconstruction_error = (self.error_accum / self.denom.clamp_min(1.0)).clamp_min(1e-6)
+            uncertainty = grads.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+            scale = (self.get_scaling.max(dim=1, keepdim=True).values / extent).clamp_min(1e-6)
+            densification_scores = (importance.pow(importance_power)
+                                    * reconstruction_error.pow(error_power)
+                                    * confidence.pow(confidence_power)
+                                    * uncertainty
+                                    * scale).squeeze()
+            positive = densification_scores[densification_scores > 0]
+            if positive.numel() > 0:
+                densification_scores = densification_scores / positive.mean().clamp_min(1e-8) * max_grad
+
         self.tmp_radii = radii
-        self.densify_and_clone(grads, max_grad, extent)
-        self.densify_and_split(grads, max_grad, extent)
+        self.densify_and_clone(grads, max_grad, extent, densification_scores)
+        self.densify_and_split(grads, max_grad, extent, densification_scores=densification_scores)
 
         prune_mask = (self.get_opacity < min_opacity).squeeze()
+        if use_segs_score and prune_score_threshold > 0.0 and densification_scores is not None:
+            redundant = densification_scores < (max_grad * prune_score_threshold)
+            if redundant.shape[0] < prune_mask.shape[0]:
+                redundant = torch.cat((redundant, torch.zeros(prune_mask.shape[0] - redundant.shape[0], device="cuda", dtype=bool)))
+            low_error = (self.error_accum / self.denom.clamp_min(1.0)).squeeze() < min_opacity
+            prune_mask = torch.logical_or(prune_mask, torch.logical_and(redundant[:prune_mask.shape[0]], low_error))
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
@@ -468,6 +503,11 @@ class GaussianModel:
 
         torch.cuda.empty_cache()
 
-    def add_densification_stats(self, viewspace_point_tensor, update_filter):
-        self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
-        self.denom[update_filter] += 1
+    def add_densification_stats(self, viewspace_point_tensor, update_filter, importance_samples=None, error_samples=None):
+        visible_ids = update_filter.reshape(-1)
+        self.xyz_gradient_accum[visible_ids] += torch.norm(viewspace_point_tensor.grad[visible_ids, :2], dim=-1, keepdim=True)
+        self.denom[visible_ids] += 1
+        if importance_samples is not None:
+            self.importance_accum[visible_ids] += importance_samples.reshape(-1, 1)
+        if error_samples is not None:
+            self.error_accum[visible_ids] += error_samples.reshape(-1, 1)
