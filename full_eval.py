@@ -27,11 +27,14 @@ parser.add_argument("--use_depth", action="store_true")
 parser.add_argument("--use_expcomp", action="store_true")
 parser.add_argument("--fast", action="store_true")
 parser.add_argument("--aa", action="store_true")
+parser.add_argument("--method", type=str, default="baseline", choices=["baseline", "segs_loss", "segs_curriculum", "segs_densification", "segs_full"])
+parser.add_argument("--seed", type=int, default=0)
 
 
 
 
 args, _ = parser.parse_known_args()
+m360_timing = tandt_timing = db_timing = 0.0
 
 all_scenes = []
 all_scenes.extend(mipnerf360_outdoor_scenes)
@@ -45,7 +48,7 @@ if not args.skip_training or not args.skip_rendering:
     parser.add_argument("--deepblending", "-db", required=True, type=str)
     args = parser.parse_args()
 if not args.skip_training:
-    common_args = " --disable_viewer --quiet --eval --test_iterations -1 "
+    common_args = f" --disable_viewer --quiet --eval --test_iterations -1 --method {args.method} --seed {args.seed} "
     
     if args.aa:
         common_args += " --antialiasing "
@@ -61,24 +64,25 @@ if not args.skip_training:
     start_time = time.time()
     for scene in mipnerf360_outdoor_scenes:
         source = args.mipnerf360 + "/" + scene
-        os.system("python train.py -s " + source + " -i images_4 -m " + args.output_path + "/" + scene + common_args)
+        os.system("python train.py -s " + source + " -i images_4 -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
     for scene in mipnerf360_indoor_scenes:
         source = args.mipnerf360 + "/" + scene
-        os.system("python train.py -s " + source + " -i images_2 -m " + args.output_path + "/" + scene + common_args)
+        os.system("python train.py -s " + source + " -i images_2 -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
     m360_timing = (time.time() - start_time)/60.0
 
     start_time = time.time()
     for scene in tanks_and_temples_scenes:
         source = args.tanksandtemples + "/" + scene
-        os.system("python train.py -s " + source + " -m " + args.output_path + "/" + scene + common_args)
+        os.system("python train.py -s " + source + " -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
     tandt_timing = (time.time() - start_time)/60.0
 
     start_time = time.time()
     for scene in deep_blending_scenes:
         source = args.deepblending + "/" + scene
-        os.system("python train.py -s " + source + " -m " + args.output_path + "/" + scene + common_args)
+        os.system("python train.py -s " + source + " -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
     db_timing = (time.time() - start_time)/60.0
 
+os.makedirs(args.output_path, exist_ok=True)
 with open(os.path.join(args.output_path,"timing.txt"), 'w') as file:
     file.write(f"m360: {m360_timing} minutes \n tandt: {tandt_timing} minutes \n db: {db_timing} minutes\n")
 
@@ -101,12 +105,12 @@ if not args.skip_rendering:
         common_args += " --train_test_exp "
 
     for scene, source in zip(all_scenes, all_sources):
-        os.system("python render.py --iteration 7000 -s " + source + " -m " + args.output_path + "/" + scene + common_args)
-        os.system("python render.py --iteration 30000 -s " + source + " -m " + args.output_path + "/" + scene + common_args)
+        os.system("python render.py --iteration 7000 -s " + source + " -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
+        os.system("python render.py --iteration 30000 -s " + source + " -m " + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + common_args)
 
 if not args.skip_metrics:
     scenes_string = ""
     for scene in all_scenes:
-        scenes_string += "\"" + args.output_path + "/" + scene + "\" "
+        scenes_string += "\"" + args.output_path + "/" + args.method + "_seed" + str(args.seed) + "/" + scene + "\" "
 
     os.system("python metrics.py -m " + scenes_string)

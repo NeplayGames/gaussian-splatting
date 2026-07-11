@@ -10,7 +10,11 @@
 #
 
 import os
+import math
+import random
+import numpy as np
 import torch
+import torch.nn.functional as F
 from random import randint
 from utils.loss_utils import l1_loss, ssim
 from gaussian_renderer import render, network_gui
@@ -22,6 +26,95 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+from LossCombiner import LossCombiner
+import Edges
+import Saliency
+
+def _set_deterministic(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+
+def _sigmoid(x):
+    if x >= 0:
+        z = math.exp(-x)
+        return 1.0 / (1.0 + z)
+    z = math.exp(x)
+    return z / (1.0 + z)
+
+
+def curriculum_lambda_weights(iteration, total_iterations, alpha_max, beta_max, args):
+    if not getattr(args, "adaptive_curriculum", False):
+        return alpha_max, beta_max
+
+    total_iterations = max(int(total_iterations), 1)
+    t = max(float(iteration), 0.0)
+    edge_delay = float(args.curriculum_edge_delay) * total_iterations
+    edge_tau = max(float(args.curriculum_edge_tau) * total_iterations, 1.0)
+    alpha = alpha_max * (1.0 - math.exp(-max(t - edge_delay, 0.0) / edge_tau))
+
+    saliency_midpoint = float(args.curriculum_saliency_start) * total_iterations
+    saliency_width = max(float(args.curriculum_saliency_width) * total_iterations, 1.0)
+    beta = beta_max * _sigmoid((t - saliency_midpoint) / saliency_width)
+
+    decay_start = float(args.curriculum_final_decay_start) * total_iterations
+    if t > decay_start and decay_start < total_iterations:
+        progress = (t - decay_start) / max(total_iterations - decay_start, 1.0)
+        floor = float(args.curriculum_final_weight_floor)
+        decay = 1.0 - (1.0 - floor) * min(max(progress, 0.0), 1.0)
+        alpha *= decay
+        beta *= decay
+    return alpha, beta
+
+
+def _sample_gaussian_image_metrics(viewpoint_cam, gaussians, visibility_filter, importance_map, error_map):
+    visible_ids = visibility_filter.reshape(-1)
+    if visible_ids.numel() == 0:
+        return None, None
+
+    points = gaussians.get_xyz[visible_ids]
+    ones = torch.ones((points.shape[0], 1), dtype=points.dtype, device=points.device)
+    hom_points = torch.cat((points, ones), dim=1)
+    projected = hom_points @ viewpoint_cam.full_proj_transform
+    ndc = projected[:, :2] / projected[:, 3:4].clamp_min(1e-7)
+    grid = ndc.view(1, -1, 1, 2)
+    importance = F.grid_sample(importance_map, grid, align_corners=True, padding_mode="border").view(-1)
+    error = F.grid_sample(error_map, grid, align_corners=True, padding_mode="border").view(-1)
+    return importance, error
+
+
+def _configure_segs_method(args):
+    if args.method == "baseline":
+        args.use_edge = False
+        args.use_saliency = False
+        args.adaptive_curriculum = False
+        args.segs_densification = False
+    elif args.method == "segs_loss":
+        args.use_edge = True
+        args.use_saliency = True
+        args.adaptive_curriculum = False
+        args.segs_densification = False
+    elif args.method == "segs_curriculum":
+        args.use_edge = True
+        args.use_saliency = True
+        args.adaptive_curriculum = True
+        args.segs_densification = False
+    elif args.method == "segs_densification":
+        args.use_edge = True
+        args.use_saliency = True
+        args.adaptive_curriculum = False
+        args.segs_densification = True
+    elif args.method == "segs_full":
+        args.use_edge = True
+        args.use_saliency = True
+        args.adaptive_curriculum = True
+        args.segs_densification = True
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -40,12 +133,25 @@ try:
 except:
     SPARSE_ADAM_AVAILABLE = False
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, args):
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
 
     first_iter = 0
+    combiner = None
+    if args.method != "baseline" or args.segs_densification:
+        combiner = LossCombiner(
+            Edges.get_edge_processor(args.edge_name),
+            Saliency.get_saliency_processor(args.saliency_name),
+            use_edge=args.use_edge,
+            use_saliency=args.use_saliency,
+            lambda_edge=args.lambda_edge,
+            lambda_saliency=args.lambda_saliency,
+            normalize=True,
+            constant_scaling_control=args.weighting_control,
+        )
+
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree, opt.optimizer_type)
     scene = Scene(dataset, gaussians)
@@ -117,7 +223,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
+        if combiner is not None and (args.use_edge or args.use_saliency):
+            current_lambda_edge, current_lambda_saliency = curriculum_lambda_weights(
+                iteration, opt.iterations, args.lambda_edge, args.lambda_saliency, args
+            )
+            combiner.lambda_edge = current_lambda_edge
+            combiner.lambda_saliency = current_lambda_saliency
+            Ll1 = combiner.compute_weighted_l1(image, gt_image)
+        else:
+            Ll1 = l1_loss(image, gt_image)
+
         if FUSED_SSIM_AVAILABLE:
             ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
         else:
@@ -164,11 +279,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                importance_samples, error_samples = None, None
+                if args.segs_densification:
+                    importance_map = combiner.compute_importance_map(gt_image).detach()
+                    error_map = torch.abs(image.detach() - gt_image).mean(dim=0, keepdim=True).unsqueeze(0)
+                    importance_samples, error_samples = _sample_gaussian_image_metrics(
+                        viewpoint_cam, gaussians, visibility_filter, importance_map, error_map
+                    )
+                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter, importance_samples, error_samples)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                    gaussians.densify_and_prune(
+                        opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii,
+                        use_segs_score=args.segs_densification,
+                        importance_power=args.segs_importance_power,
+                        error_power=args.segs_error_power,
+                        confidence_power=args.segs_confidence_power,
+                        prune_score_threshold=args.segs_prune_score_threshold,
+                    )
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -202,6 +331,8 @@ def prepare_output_and_logger(args):
     os.makedirs(args.model_path, exist_ok = True)
     with open(os.path.join(args.model_path, "cfg_args"), 'w') as cfg_log_f:
         cfg_log_f.write(str(Namespace(**vars(args))))
+    with open(os.path.join(args.model_path, "seed.txt"), 'w') as seed_f:
+        seed_f.write(str(getattr(args, "seed", 0)))
 
     # Create Tensorboard writer
     tb_writer = None
@@ -267,19 +398,42 @@ if __name__ == "__main__":
     parser.add_argument('--disable_viewer', action='store_true', default=False)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--method", type=str, default="baseline", choices=["baseline", "segs_loss", "segs_curriculum", "segs_densification", "segs_full"])
+    parser.add_argument("--use_edge", action="store_true", default=False)
+    parser.add_argument("--use_saliency", action="store_true", default=False)
+    parser.add_argument("--edge_name", type=str, default="sobel", choices=["sobel"])
+    parser.add_argument("--saliency_name", type=str, default="Boolean", choices=["Boolean", "itti"])
+    parser.add_argument("--lambda_edge", type=float, default=0.2)
+    parser.add_argument("--lambda_saliency", type=float, default=0.1)
+    parser.add_argument("--adaptive_curriculum", action="store_true", default=False)
+    parser.add_argument("--curriculum_edge_delay", type=float, default=0.05)
+    parser.add_argument("--curriculum_edge_tau", type=float, default=0.18)
+    parser.add_argument("--curriculum_saliency_start", type=float, default=0.55)
+    parser.add_argument("--curriculum_saliency_width", type=float, default=0.08)
+    parser.add_argument("--curriculum_final_decay_start", type=float, default=0.90)
+    parser.add_argument("--curriculum_final_weight_floor", type=float, default=0.50)
+    parser.add_argument("--weighting_control", action="store_true", default=False)
+    parser.add_argument("--segs_densification", action="store_true", default=False)
+    parser.add_argument("--segs_importance_power", type=float, default=1.0)
+    parser.add_argument("--segs_error_power", type=float, default=1.0)
+    parser.add_argument("--segs_confidence_power", type=float, default=0.5)
+    parser.add_argument("--segs_prune_score_threshold", type=float, default=0.0)
     args = parser.parse_args(sys.argv[1:])
+    _configure_segs_method(args)
     args.save_iterations.append(args.iterations)
     
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)
-    safe_state(args.quiet)
+    safe_state(args.quiet, seed=args.seed)
+    _set_deterministic(args.seed)
 
     # Start GUI server, configure and run training
     if not args.disable_viewer:
         network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args)
 
     # All done
     print("\nTraining complete.")
