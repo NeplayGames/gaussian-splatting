@@ -55,9 +55,33 @@ def validate_dataset_entry(entry):
     if errors: raise AssetError('Invalid dataset manifest entry:\n- '+'\n- '.join(errors))
     return True
 
+def _valid_commit(value): return bool(re.fullmatch(r"[0-9a-fA-F]{40}", str(value)))
+
 def validate_model_entry(entry):
-    if contains_placeholder(entry.get('url','')) or contains_placeholder(entry.get('sha256','')) or int(entry.get('size_bytes',-1))<=0:
-        raise AssetError(f"Invalid pending model manifest entry: {entry.get('name','<unnamed>')}")
+    errors=[]; name=entry.get('name','<unnamed>')
+    url=entry.get('url','')
+    if not _valid_url(url): errors.append('model URL must be HTTP(S)')
+    if contains_placeholder(url): errors.append('model URL contains a placeholder')
+    info=entry.get('information_url','')
+    if info and (not _valid_url(info) or contains_placeholder(info)): errors.append('information_url must be a final HTTP(S) URL')
+    if not validate_sha256(entry.get('sha256')) or contains_placeholder(entry.get('sha256','')): errors.append('sha256 must be final 64 hex chars')
+    try:
+        if int(entry.get('size_bytes',0))<=0: errors.append('size_bytes must be positive')
+    except Exception: errors.append('size_bytes must be positive')
+    if not _valid_commit(entry.get('training_commit')) or contains_placeholder(entry.get('training_commit','')): errors.append('training_commit must be a full 40-character SHA')
+    if not _valid_commit(entry.get('upstream_commit')) or contains_placeholder(entry.get('upstream_commit','')): errors.append('upstream_commit must be a full 40-character SHA')
+    if not validate_sha256(entry.get('config_hash')) or contains_placeholder(entry.get('config_hash','')): errors.append('config_hash must be a 64-character SHA-256')
+    scene=entry.get('scene'); method=entry.get('method')
+    if scene not in ('truck','drjohnson'): errors.append('unsupported scene')
+    if method not in ('baseline','segs_full'): errors.append('unsupported method')
+    if entry.get('seed') != 0: errors.append('seed must be 0 for default demo models')
+    if entry.get('iteration') != 30000: errors.append('iteration must be 30000 for default demo models')
+    if not entry.get('required_files'): errors.append('required_files is required')
+    expected=f"{scene}_{method}_seed{entry.get('seed')}_iter{entry.get('iteration')}.tar.gz"
+    if entry.get('archive_filename') != expected: errors.append(f'archive_filename must be {expected}')
+    version=str(entry.get('version',''))
+    if not version or contains_placeholder(version) or 'pending' in version.lower(): errors.append('version must not be pending or placeholder text')
+    if errors: raise AssetError(f"Invalid model manifest entry {name}:\n- "+'\n- '.join(errors))
     return True
 
 def validate_manifest(manifest, asset_scope='all'):

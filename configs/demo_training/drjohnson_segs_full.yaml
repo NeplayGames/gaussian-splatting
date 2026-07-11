@@ -1,0 +1,90 @@
+{
+  "background": {
+    "random_background": false,
+    "white_background": false
+  },
+  "checkpoint_iterations": [],
+  "controls": {
+    "constant_scale_control": false,
+    "shuffled_map_control": false
+  },
+  "dataset": "graphdeco-tandt-db-2023",
+  "densification": {
+    "densification_interval": 100,
+    "densify_from_iter": 500,
+    "densify_grad_threshold": 0.0002,
+    "densify_until_iter": 15000,
+    "mode": "standard_upstream",
+    "opacity_reset_interval": 3000
+  },
+  "evaluation": {
+    "enabled": true,
+    "split": "repository-default-eval"
+  },
+  "exposure": {
+    "exposure_lr_delay_mult": 0.0,
+    "exposure_lr_delay_steps": 0,
+    "exposure_lr_final": 0.001,
+    "exposure_lr_init": 0.01,
+    "train_test_exp": false
+  },
+  "image_directory": "images",
+  "image_resolution": -1,
+  "iterations": 30000,
+  "method": "segs_full",
+  "optimization": {
+    "feature_lr": 0.0025,
+    "lambda_dssim": 0.2,
+    "objective": "standard_l1_plus_dssim",
+    "opacity_lr": 0.05,
+    "percent_dense": 0.01,
+    "position_lr_delay_mult": 0.01,
+    "position_lr_final": 1.6e-06,
+    "position_lr_init": 0.00016,
+    "position_lr_max_steps": 30000,
+    "rotation_lr": 0.001,
+    "scaling_lr": 0.005
+  },
+  "pruning": {
+    "mode": "standard_upstream",
+    "opacity_threshold": 0.005,
+    "size_threshold_after_opacity_reset": 20
+  },
+  "rendering": {
+    "antialiasing": false,
+    "compute_cov3D_python": false,
+    "convert_SHs_python": false,
+    "spherical_harmonic_degree": 3
+  },
+  "save_iterations": [
+    30000
+  ],
+  "scene": "drjohnson",
+  "seed": 0,
+  "segs": {
+    "adaptive_curriculum": true,
+    "confidence_power": 0.5,
+    "curriculum_edge_delay": 0.05,
+    "curriculum_edge_tau": 0.18,
+    "curriculum_final_decay_start": 0.9,
+    "curriculum_final_weight_floor": 0.5,
+    "curriculum_saliency_start": 0.55,
+    "curriculum_saliency_width": 0.08,
+    "densification_only": false,
+    "edge_only": false,
+    "edge_weighting": true,
+    "error_power": 1.0,
+    "importance_aware_densification": true,
+    "importance_power": 1.0,
+    "lambda_edge": 0.2,
+    "lambda_saliency": 0.1,
+    "prune_score_threshold": 0.0,
+    "saliency_only": false,
+    "saliency_weighting": true,
+    "segs_pruning": true
+  },
+  "test_iterations": [
+    7000,
+    30000
+  ]
+}

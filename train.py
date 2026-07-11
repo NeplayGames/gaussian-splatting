@@ -154,6 +154,24 @@ def _configure_segs_method(args):
     else:
         raise ValueError(f"Unknown method: {args.method}")
 
+
+
+def _assert_demo_method_configuration(args):
+    if args.method == "baseline":
+        assert args.method == "baseline"
+        assert not args.use_edge, "baseline must disable edge weighting"
+        assert not args.use_saliency, "baseline must disable saliency weighting"
+        assert not args.segs_densification, "baseline must disable SEGS densification"
+        assert not args.adaptive_curriculum, "baseline must disable adaptive curriculum"
+        assert not args.weighting_control, "baseline must disable constant-scale controls"
+        assert not args.shuffle_map_control, "baseline must disable shuffled-map controls"
+    elif args.method == "segs_full":
+        assert args.use_edge and args.use_saliency, "segs_full must enable edge and saliency weighting"
+        assert args.adaptive_curriculum, "segs_full must enable adaptive curriculum"
+        assert args.segs_densification, "segs_full must enable importance-aware densification"
+        assert not args.weighting_control, "segs_full must not use constant-scale controls"
+        assert not args.shuffle_map_control, "segs_full must not use shuffled-map controls"
+
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -523,6 +541,7 @@ if __name__ == "__main__":
     if args.method not in SEGS_METHODS:
         parser.error(f"Unsupported method {args.method!r}. Supported methods: {', '.join(SEGS_METHODS)}")
     _configure_segs_method(args)
+    _assert_demo_method_configuration(args)
     args.save_iterations.append(args.iterations)
     
     print("Optimizing " + args.model_path)
