@@ -4,16 +4,37 @@
   "datasets": [
     {
       "name": "Tanks and Temples / Deep Blending official archive",
-      "version": "graphdeco-2023",
+      "version": "graphdeco-tandt-db-2023",
       "url": "https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/datasets/input/tandt_db.zip",
-      "sha256": "UNVERIFIED_REPLACE_AFTER_LOCAL_ASSET_AUDIT",
-      "size_bytes": -1,
-      "license_url": "https://www.tanksandtemples.org/",
+      "sha256": "816e62f22a161abbfe841d2a6b10cdf036e297c9fa289b3bfeee9c6ec526d7e1",
+      "size_bytes": 682628995,
+      "license_url": "https://www.tanksandtemples.org/license/",
       "terms_url": "https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/",
-      "attribution": "Tanks and Temples and Deep Blending datasets as referenced by the original 3D Gaussian Splatting repository.",
+      "attribution": "Official GraphDECO-prepared Tanks and Temples Truck and Deep Blending DrJohnson COLMAP dataset archive referenced by the 3D Gaussian Splatting project.",
       "archive_filename": "tandt_db.zip",
-      "expected_extracted_files": ["truck/images", "truck/sparse", "drjohnson/images", "drjohnson/sparse"],
-      "required_scenes": ["truck", "drjohnson"]
+      "expected_extracted_files": [
+        "tandt/truck/images",
+        "tandt/truck/sparse/0/cameras.bin",
+        "tandt/truck/sparse/0/images.bin",
+        "tandt/truck/sparse/0/points3D.bin",
+        "db/drjohnson/images",
+        "db/drjohnson/sparse/0/cameras.bin",
+        "db/drjohnson/sparse/0/images.bin",
+        "db/drjohnson/sparse/0/points3D.bin"
+      ],
+      "required_scenes": [
+        "truck",
+        "drjohnson"
+      ],
+      "information_url": "https://github.com/graphdeco-inria/gaussian-splatting",
+      "scene_paths": {
+        "truck": "tandt/truck",
+        "drjohnson": "db/drjohnson"
+      },
+      "extract_prefixes": [
+        "tandt/truck/",
+        "db/drjohnson/"
+      ]
     }
   ],
   "models": [
@@ -31,20 +52,115 @@
       "terms_url": "docs/DEMO_ASSETS.md",
       "attribution": "Packaged by repository maintainers after local training.",
       "archive_filename": "truck_baseline_seed0_iter30000.tar.gz",
-      "expected_extracted_files": ["cfg_args", "point_cloud/iteration_30000/point_cloud.ply"],
+      "expected_extracted_files": [
+        "cfg_args",
+        "point_cloud/iteration_30000/point_cloud.ply"
+      ],
       "training_commit": "PENDING_LOCAL_TRAINING_COMMIT",
       "upstream_commit": "PENDING_UPSTREAM_COMMIT",
       "config_hash": "PENDING_CONFIG_HASH",
-      "required_files": ["cfg_args", "cfg_args.json", "resolved_config.json", "runtime_metadata.json", "optimization_budget.json", "point_cloud/iteration_30000/point_cloud.ply", "MODEL_CARD.md"]
+      "required_files": [
+        "cfg_args",
+        "cfg_args.json",
+        "resolved_config.json",
+        "runtime_metadata.json",
+        "optimization_budget.json",
+        "point_cloud/iteration_30000/point_cloud.ply",
+        "MODEL_CARD.md"
+      ]
     },
     {
-      "name": "SEGS demo truck segs_full model", "version": "pending-local-training", "method": "segs_full", "scene": "truck", "seed": 0, "iteration": 30000, "url": "PENDING_STABLE_HOSTING_URL", "sha256": "PENDING_SHA256_AFTER_PACKAGING", "size_bytes": -1, "license_url": "LICENSE.md", "terms_url": "docs/DEMO_ASSETS.md", "attribution": "Packaged by repository maintainers after local training.", "archive_filename": "truck_segs_full_seed0_iter30000.tar.gz", "expected_extracted_files": ["cfg_args", "point_cloud/iteration_30000/point_cloud.ply"], "training_commit": "PENDING_LOCAL_TRAINING_COMMIT", "upstream_commit": "PENDING_UPSTREAM_COMMIT", "config_hash": "PENDING_CONFIG_HASH", "required_files": ["cfg_args", "cfg_args.json", "resolved_config.json", "runtime_metadata.json", "optimization_budget.json", "point_cloud/iteration_30000/point_cloud.ply", "MODEL_CARD.md"]
+      "name": "SEGS demo truck segs_full model",
+      "version": "pending-local-training",
+      "method": "segs_full",
+      "scene": "truck",
+      "seed": 0,
+      "iteration": 30000,
+      "url": "PENDING_STABLE_HOSTING_URL",
+      "sha256": "PENDING_SHA256_AFTER_PACKAGING",
+      "size_bytes": -1,
+      "license_url": "LICENSE.md",
+      "terms_url": "docs/DEMO_ASSETS.md",
+      "attribution": "Packaged by repository maintainers after local training.",
+      "archive_filename": "truck_segs_full_seed0_iter30000.tar.gz",
+      "expected_extracted_files": [
+        "cfg_args",
+        "point_cloud/iteration_30000/point_cloud.ply"
+      ],
+      "training_commit": "PENDING_LOCAL_TRAINING_COMMIT",
+      "upstream_commit": "PENDING_UPSTREAM_COMMIT",
+      "config_hash": "PENDING_CONFIG_HASH",
+      "required_files": [
+        "cfg_args",
+        "cfg_args.json",
+        "resolved_config.json",
+        "runtime_metadata.json",
+        "optimization_budget.json",
+        "point_cloud/iteration_30000/point_cloud.ply",
+        "MODEL_CARD.md"
+      ]
     },
     {
-      "name": "SEGS demo drjohnson baseline model", "version": "pending-local-training", "method": "baseline", "scene": "drjohnson", "seed": 0, "iteration": 30000, "url": "PENDING_STABLE_HOSTING_URL", "sha256": "PENDING_SHA256_AFTER_PACKAGING", "size_bytes": -1, "license_url": "LICENSE.md", "terms_url": "docs/DEMO_ASSETS.md", "attribution": "Packaged by repository maintainers after local training.", "archive_filename": "drjohnson_baseline_seed0_iter30000.tar.gz", "expected_extracted_files": ["cfg_args", "point_cloud/iteration_30000/point_cloud.ply"], "training_commit": "PENDING_LOCAL_TRAINING_COMMIT", "upstream_commit": "PENDING_UPSTREAM_COMMIT", "config_hash": "PENDING_CONFIG_HASH", "required_files": ["cfg_args", "cfg_args.json", "resolved_config.json", "runtime_metadata.json", "optimization_budget.json", "point_cloud/iteration_30000/point_cloud.ply", "MODEL_CARD.md"]
+      "name": "SEGS demo drjohnson baseline model",
+      "version": "pending-local-training",
+      "method": "baseline",
+      "scene": "drjohnson",
+      "seed": 0,
+      "iteration": 30000,
+      "url": "PENDING_STABLE_HOSTING_URL",
+      "sha256": "PENDING_SHA256_AFTER_PACKAGING",
+      "size_bytes": -1,
+      "license_url": "LICENSE.md",
+      "terms_url": "docs/DEMO_ASSETS.md",
+      "attribution": "Packaged by repository maintainers after local training.",
+      "archive_filename": "drjohnson_baseline_seed0_iter30000.tar.gz",
+      "expected_extracted_files": [
+        "cfg_args",
+        "point_cloud/iteration_30000/point_cloud.ply"
+      ],
+      "training_commit": "PENDING_LOCAL_TRAINING_COMMIT",
+      "upstream_commit": "PENDING_UPSTREAM_COMMIT",
+      "config_hash": "PENDING_CONFIG_HASH",
+      "required_files": [
+        "cfg_args",
+        "cfg_args.json",
+        "resolved_config.json",
+        "runtime_metadata.json",
+        "optimization_budget.json",
+        "point_cloud/iteration_30000/point_cloud.ply",
+        "MODEL_CARD.md"
+      ]
     },
     {
-      "name": "SEGS demo drjohnson segs_full model", "version": "pending-local-training", "method": "segs_full", "scene": "drjohnson", "seed": 0, "iteration": 30000, "url": "PENDING_STABLE_HOSTING_URL", "sha256": "PENDING_SHA256_AFTER_PACKAGING", "size_bytes": -1, "license_url": "LICENSE.md", "terms_url": "docs/DEMO_ASSETS.md", "attribution": "Packaged by repository maintainers after local training.", "archive_filename": "drjohnson_segs_full_seed0_iter30000.tar.gz", "expected_extracted_files": ["cfg_args", "point_cloud/iteration_30000/point_cloud.ply"], "training_commit": "PENDING_LOCAL_TRAINING_COMMIT", "upstream_commit": "PENDING_UPSTREAM_COMMIT", "config_hash": "PENDING_CONFIG_HASH", "required_files": ["cfg_args", "cfg_args.json", "resolved_config.json", "runtime_metadata.json", "optimization_budget.json", "point_cloud/iteration_30000/point_cloud.ply", "MODEL_CARD.md"]
+      "name": "SEGS demo drjohnson segs_full model",
+      "version": "pending-local-training",
+      "method": "segs_full",
+      "scene": "drjohnson",
+      "seed": 0,
+      "iteration": 30000,
+      "url": "PENDING_STABLE_HOSTING_URL",
+      "sha256": "PENDING_SHA256_AFTER_PACKAGING",
+      "size_bytes": -1,
+      "license_url": "LICENSE.md",
+      "terms_url": "docs/DEMO_ASSETS.md",
+      "attribution": "Packaged by repository maintainers after local training.",
+      "archive_filename": "drjohnson_segs_full_seed0_iter30000.tar.gz",
+      "expected_extracted_files": [
+        "cfg_args",
+        "point_cloud/iteration_30000/point_cloud.ply"
+      ],
+      "training_commit": "PENDING_LOCAL_TRAINING_COMMIT",
+      "upstream_commit": "PENDING_UPSTREAM_COMMIT",
+      "config_hash": "PENDING_CONFIG_HASH",
+      "required_files": [
+        "cfg_args",
+        "cfg_args.json",
+        "resolved_config.json",
+        "runtime_metadata.json",
+        "optimization_budget.json",
+        "point_cloud/iteration_30000/point_cloud.ply",
+        "MODEL_CARD.md"
+      ]
     }
   ]
 }
