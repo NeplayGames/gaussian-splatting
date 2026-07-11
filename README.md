@@ -5,6 +5,18 @@
 ```bash
 git clone --recursive <repository>
 cd gaussian-splatting
+python run_demo.py
+```
+
+Windows wrapper:
+
+```powershell
+.\run_demo.ps1
+```
+
+Linux wrapper:
+
+```bash
 ./run_demo.sh
 ```
 
@@ -12,10 +24,10 @@ This workflow is intentionally **local-only**. The professor's computer performs
 
 ### Supported system and hardware
 
-* **Operating system:** Linux is supported for the one-command demo; Ubuntu 22.04 LTS is the recommended target.
+* **Operating system:** Windows and Linux are supported by the `run_demo.py` launcher; Ubuntu 22.04 LTS remains the recommended Linux target.
 * **GPU:** A CUDA-capable NVIDIA GPU visible through `nvidia-smi` is required.
-* **CUDA build tools:** `nvcc`, `g++`, `git`, CMake, and Ninja must be available locally so PyTorch CUDA extensions can compile on the professor's machine. `run_demo.sh` checks the external tools before compilation and prints a short explanation if any are missing.
-* **Python environment:** The script prefers Conda with `environment-demo.yml`. If Conda is unavailable, it reuses or creates `.venv` and installs the same local runtime dependencies with `pip`, including `pandas`, `openpyxl`, `cmake`, and `ninja`.
+* **CUDA build tools:** A system CUDA toolkit with `nvcc`, `git`, CMake, Ninja, and a compatible native compiler must be available locally so PyTorch CUDA extensions can compile on the professor's machine. Linux requires `g++`; Windows requires Visual Studio C++ tools (`cl.exe`). On Windows, the launcher imports the Visual Studio build environment when possible, but running from Developer PowerShell for Visual Studio is still recommended if `cl.exe` is not already on `PATH`.
+* **Python environment:** The launcher uses Conda with `environment-demo.yml` and the environment name `segs-demo`. It creates the environment only when missing, reuses it on later runs, and updates it only when `SEGS_UPDATE_ENV=1` is set.
 * **Disk space:** Plan for at least several tens of GB free: the dataset archive/cache, extracted scenes, two local training outputs (`baseline` and `segs_full`), renders, logs, and reports are all stored on the local machine. Use more space for `--full` runs.
 
 The default professor demo is reduced budget: scene `truck`, methods `baseline,segs_full`, seed `0`, test split, viewer disabled, and `1000` training iterations. Reduced-budget results are for bug-finding and workflow review, not final thesis-quality numbers.
@@ -23,9 +35,16 @@ The default professor demo is reduced budget: scene `truck`, methods `baseline,s
 Additional modes:
 
 ```bash
-./run_demo.sh --resume   # reuse valid environment, downloads, compiled extensions, and validated completed outputs
-./run_demo.sh --full     # configured 30,000-iteration experiment; much slower and larger
+python run_demo.py --resume   # reuse valid environment, downloads, compiled extensions, and validated completed outputs
+python run_demo.py --full     # configured 30,000-iteration experiment; much slower and larger
+python run_demo.py --check-only
 ```
+
+Launcher environment variables:
+
+* `SEGS_DEMO_ENV` overrides the Conda environment name (`segs-demo` by default).
+* `SEGS_UPDATE_ENV=1` updates the existing Conda environment from `environment-demo.yml`.
+* `SEGS_FORCE_REBUILD=1` rebuilds the CUDA extensions even when they already import successfully.
 
 ### Logs, results, and resume behavior
 
@@ -59,10 +78,36 @@ This repository is a SEGS research fork of 3D Gaussian Splatting. It preserves t
 ```bash
 git clone --recursive https://github.com/NeplayGames/gaussian-splatting.git
 cd gaussian-splatting
-python -m tools.quickstart
+python run_demo.py
 ```
 
-The demo is designed to run locally on a manually operated NVIDIA GPU machine. It checks Python, PyTorch, CUDA, the rasterizer extensions, disk space, and submodules; downloads or reuses cached datasets and pretrained models under `~/.cache/segs-demo`; renders test views; computes PSNR, SSIM, and LPIPS; measures rendering performance; writes `demo_output/results.csv`; and generates `demo_output/report.html`. Use `--offline` after assets are cached, `--no-open` for browser-free operation, `--clean-output` to reset outputs, and `--train --iterations 1000` only for reduced-budget demonstration training. Reduced-budget results are not paper results.
+### Windows
+
+```powershell
+python run_demo.py
+```
+
+or:
+
+```powershell
+.\run_demo.ps1
+```
+
+### Linux
+
+```bash
+python run_demo.py
+```
+
+or:
+
+```bash
+./run_demo.sh
+```
+
+The demo is designed to run locally on a manually operated NVIDIA GPU machine. An NVIDIA GPU, system CUDA toolkit, and compatible native compiler are still required. It checks Python, PyTorch, CUDA, the rasterizer extensions, disk space, and submodules; downloads or reuses cached datasets and pretrained models under `~/.cache/segs-demo`; renders test views; computes PSNR, SSIM, and LPIPS; measures rendering performance; writes `demo_output/results.csv`; and generates `demo_output/report.html`. Use `--offline` after assets are cached, `--no-open` for browser-free operation, `--clean-output` to reset outputs, and `--iterations 1000` only for reduced-budget demonstration training. Reduced-budget results are not paper results.
+
+Launcher environment variables: `SEGS_DEMO_ENV` overrides the Conda environment name, `SEGS_UPDATE_ENV=1` updates an existing Conda environment, and `SEGS_FORCE_REBUILD=1` forces CUDA extension rebuilds.
 
 Default scenes: Tanks and Temples `truck` and Deep Blending `drjohnson`. Default methods: `baseline` and `segs_full`. The committed manifest records expected asset metadata; maintainers must replace pending model-package checksums and hosting URLs only after local training, packaging, and checksum verification. See `docs/QUICKSTART.md`, `docs/DEMO_ASSETS.md`, `docs/TROUBLESHOOTING.md`, and `docs/LOCAL_TESTING.md`.
 

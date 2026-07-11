@@ -81,6 +81,8 @@ def test_metrics_uses_installed_lpips_package():
 def test_demo_dependency_declarations_include_local_requirements():
     env=Path('environment-demo.yml').read_text()
     script=Path('run_demo.sh').read_text()
+    launcher=Path('run_demo.py').read_text()
     for dep in ['pandas', 'openpyxl', 'cmake', 'ninja']:
         assert dep in env
-        assert dep in script
+    assert 'python run_demo.py "$@"' in script
+    assert 'cmake' in launcher and 'ninja' in launcher
