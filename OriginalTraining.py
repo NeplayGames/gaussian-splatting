@@ -54,6 +54,25 @@ except:
 # Initialize once (outside function, global)
 lpips_fn = lpips.LPIPS(net='vgg').cuda()  # perceptual similarity
 
+
+def _sample_gaussian_image_metrics(viewpoint_cam, gaussians, visibility_filter, importance_map, error_map):
+    """Sample image-space SEGS importance/error at each visible Gaussian projection."""
+    visible_ids = visibility_filter.reshape(-1)
+    if visible_ids.numel() == 0:
+        return None, None
+
+    points = gaussians.get_xyz[visible_ids]
+    ones = torch.ones((points.shape[0], 1), dtype=points.dtype, device=points.device)
+    hom_points = torch.cat((points, ones), dim=1)
+    projected = hom_points @ viewpoint_cam.full_proj_transform
+    ndc = projected[:, :2] / projected[:, 3:4].clamp_min(1e-7)
+
+    # grid_sample expects normalized coordinates in [-1, 1], matching projected NDC.
+    grid = ndc.view(1, -1, 1, 2)
+    importance = F.grid_sample(importance_map, grid, align_corners=True, padding_mode="border").view(-1)
+    error = F.grid_sample(error_map, grid, align_corners=True, padding_mode="border").view(-1)
+    return importance, error
+
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, edge_name, saliency_name, args):
 
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
@@ -226,11 +245,25 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                importance_samples, error_samples = None, None
+                if args.segs_densification:
+                    importance_map = combiner.compute_importance_map(gt_image).detach()
+                    error_map = torch.abs(image.detach() - gt_image).mean(dim=0, keepdim=True).unsqueeze(0)
+                    importance_samples, error_samples = _sample_gaussian_image_metrics(
+                        viewpoint_cam, gaussians, visibility_filter, importance_map, error_map
+                    )
+                gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter, importance_samples, error_samples)
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                    gaussians.densify_and_prune(
+                        opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii,
+                        use_segs_score=args.segs_densification,
+                        importance_power=args.segs_importance_power,
+                        error_power=args.segs_error_power,
+                        confidence_power=args.segs_confidence_power,
+                        prune_score_threshold=args.segs_prune_score_threshold,
+                    )
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
@@ -553,6 +586,16 @@ if __name__ == "__main__":
                         help="Weight for saliency contribution")
     parser.add_argument("--weighting_control", action="store_true", default=False,
                         help="Use L_control = c * L_3DGS, where c is the mean of the unnormalized edge/saliency weight map")
+    parser.add_argument("--segs_densification", action="store_true", default=False,
+                        help="Use one SEGS score to guide loss, densification, and low-score pruning")
+    parser.add_argument("--segs_importance_power", type=float, default=1.0,
+                        help="Exponent eta for perceptual importance in the SEGS densification score")
+    parser.add_argument("--segs_error_power", type=float, default=1.0,
+                        help="Exponent rho for reconstruction error in the SEGS densification score")
+    parser.add_argument("--segs_confidence_power", type=float, default=0.5,
+                        help="Exponent for multi-view visibility confidence in the SEGS densification score")
+    parser.add_argument("--segs_prune_score_threshold", type=float, default=0.0,
+                        help="Prune low-error Gaussians whose SEGS score is below this fraction of densify_grad_threshold")
 
 
     args = parser.parse_args(sys.argv[1:])

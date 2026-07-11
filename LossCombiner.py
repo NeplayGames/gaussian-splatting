@@ -109,6 +109,11 @@ class LossCombiner:
         """
         return self._normalize_weight(self.compute_raw_weight(gt_image))
 
+
+    def compute_importance_map(self, gt_image):
+        """Return the normalized perceptual SEGS importance map used by loss and densification."""
+        return self.compute_phi(gt_image)
+
     def compute_loss(self, pred, gt):
         """
         Compute the SEGS loss:
