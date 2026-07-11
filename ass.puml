@@ -1,0 +1,85 @@
+puml@startuml
+title 3D Gaussian Splatting Training Flow (Class Diagram)
+
+package "Training System" {
+    class Training {
+        + run()
+        + training(...)
+    }
+
+    class LossCombiner {
+        + compute_loss(pred, gt)
+        + compute_phi(gt)
+        + Get_Edge_saliency_Similarity(pred, gt)
+    }
+
+    class TrainingReport {
+        + log_metrics_to_excel(...)
+    }
+
+    class Metrics {
+        + DetermineTestPSNR(...)
+        + DetermineTestMetrics(...)
+    }
+}
+
+package "Rendering Pipeline" {
+    class Renderer {
+        + render(camera, gaussians, pipe, bg)
+    }
+    class PipelineParams
+}
+
+package "Scene & Data" {
+    class Scene {
+        + getTrainCameras()
+        + getTestCameras()
+        + save(iter)
+    }
+    class ModelParams
+    class OptimizationParams
+}
+
+package "3D Gaussian Model" {
+    class GaussianModel {
+        + training_setup(opt)
+        + update_learning_rate(iter)
+        + oneupSHdegree()
+        + add_densification_stats(...)
+        + densify_and_prune(...)
+        + reset_opacity()
+    }
+}
+
+package "Edge & Saliency" {
+    interface EdgeAbs {
+        + get_edge_map(img)
+        + edge_similarity(pred, gt)
+    }
+    class Sobel implements EdgeAbs
+
+    interface SaliencyAbs {
+        + get_saliency_map(img)
+        + saliency_similarity(pred, gt)
+    }
+    class BooleanMap implements SaliencyAbs
+    class Itti implements SaliencyAbs
+}
+
+Training --> Scene
+Training --> GaussianModel
+Training --> Renderer
+Training --> LossCombiner
+Training --> Metrics
+Training --> TrainingReport
+
+LossCombiner --> EdgeAbs
+LossCombiner --> SaliencyAbs
+
+Renderer --> GaussianModel
+
+Scene --> ModelParams
+Scene --> PipelineParams
+Training --> OptimizationParams
+
+@enduml
