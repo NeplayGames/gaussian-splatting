@@ -79,26 +79,50 @@ class GaussianModel:
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
+            self.importance_accum,
+            self.error_accum,
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
         )
     
     def restore(self, model_args, training_args):
-        (self.active_sh_degree, 
-        self._xyz, 
-        self._features_dc, 
-        self._features_rest,
-        self._scaling, 
-        self._rotation, 
-        self._opacity,
-        self.max_radii2D, 
-        xyz_gradient_accum, 
-        denom,
-        opt_dict, 
-        self.spatial_lr_scale) = model_args
+        if len(model_args) == 12:
+            (self.active_sh_degree,
+            self._xyz,
+            self._features_dc,
+            self._features_rest,
+            self._scaling,
+            self._rotation,
+            self._opacity,
+            self.max_radii2D,
+            xyz_gradient_accum,
+            denom,
+            opt_dict,
+            self.spatial_lr_scale) = model_args
+            importance_accum = None
+            error_accum = None
+        else:
+            (self.active_sh_degree,
+            self._xyz,
+            self._features_dc,
+            self._features_rest,
+            self._scaling,
+            self._rotation,
+            self._opacity,
+            self.max_radii2D,
+            xyz_gradient_accum,
+            denom,
+            importance_accum,
+            error_accum,
+            opt_dict,
+            self.spatial_lr_scale) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
+        if importance_accum is not None:
+            self.importance_accum = importance_accum
+        if error_accum is not None:
+            self.error_accum = error_accum
         self.optimizer.load_state_dict(opt_dict)
 
     @property
@@ -364,6 +388,8 @@ class GaussianModel:
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.importance_accum = self.importance_accum[valid_points_mask]
         self.error_accum = self.error_accum[valid_points_mask]
+        if hasattr(self, "_segs_utility"):
+            self._segs_utility = self._segs_utility[valid_points_mask]
 
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
@@ -391,7 +417,15 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii):
+    def reset_densification_stats(self):
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.importance_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.error_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii,
+                              new_importance_accum=None, new_error_accum=None, new_denom=None, new_segs_utility=None):
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
@@ -409,9 +443,19 @@ class GaussianModel:
 
         self.tmp_radii = torch.cat((self.tmp_radii, new_tmp_radii))
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.importance_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.error_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        if new_denom is None:
+            new_denom = torch.zeros((new_xyz.shape[0], 1), device="cuda")
+        if new_importance_accum is None:
+            new_importance_accum = torch.zeros((new_xyz.shape[0], 1), device="cuda")
+        if new_error_accum is None:
+            new_error_accum = torch.zeros((new_xyz.shape[0], 1), device="cuda")
+        self.denom = torch.cat((self.denom, new_denom), dim=0)
+        self.importance_accum = torch.cat((self.importance_accum, new_importance_accum), dim=0)
+        self.error_accum = torch.cat((self.error_accum, new_error_accum), dim=0)
+        if hasattr(self, "_segs_utility"):
+            if new_segs_utility is None:
+                new_segs_utility = torch.zeros((new_xyz.shape[0], 1), device="cuda")
+            self._segs_utility = torch.cat((self._segs_utility, new_segs_utility), dim=0)
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2, densification_scores=None):
@@ -438,7 +482,13 @@ class GaussianModel:
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_tmp_radii = self.tmp_radii[selected_pts_mask].repeat(N)
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_tmp_radii)
+        new_importance_accum = self.importance_accum[selected_pts_mask].repeat(N, 1)
+        new_error_accum = self.error_accum[selected_pts_mask].repeat(N, 1)
+        new_denom = self.denom[selected_pts_mask].repeat(N, 1)
+        new_segs_utility = self._segs_utility[selected_pts_mask].repeat(N, 1) if hasattr(self, "_segs_utility") else None
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_tmp_radii,
+                                   new_importance_accum, new_error_accum, new_denom, new_segs_utility)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -459,7 +509,13 @@ class GaussianModel:
 
         new_tmp_radii = self.tmp_radii[selected_pts_mask]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii)
+        new_importance_accum = self.importance_accum[selected_pts_mask]
+        new_error_accum = self.error_accum[selected_pts_mask]
+        new_denom = self.denom[selected_pts_mask]
+        new_segs_utility = self._segs_utility[selected_pts_mask] if hasattr(self, "_segs_utility") else None
+
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii,
+                                   new_importance_accum, new_error_accum, new_denom, new_segs_utility)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, radii, use_segs_score=False,
                           importance_power=1.0, error_power=1.0, confidence_power=0.5, prune_score_threshold=0.0):
@@ -471,6 +527,7 @@ class GaussianModel:
             confidence = (self.denom / (self.denom.max().clamp_min(1.0))).clamp(0.0, 1.0)
             importance = (self.importance_accum / self.denom.clamp_min(1.0)).clamp_min(1e-6)
             reconstruction_error = (self.error_accum / self.denom.clamp_min(1.0)).clamp_min(1e-6)
+            pre_error = reconstruction_error.clone()
             uncertainty = grads.norm(dim=-1, keepdim=True).clamp_min(1e-6)
             scale = (self.get_scaling.max(dim=1, keepdim=True).values / extent).clamp_min(1e-6)
             densification_scores = (importance.pow(importance_power)
@@ -481,6 +538,9 @@ class GaussianModel:
             positive = densification_scores[densification_scores > 0]
             if positive.numel() > 0:
                 densification_scores = densification_scores / positive.mean().clamp_min(1e-8) * max_grad
+            pre_score = densification_scores.clone()
+            pre_utility = pre_score.clone()
+            self._segs_utility = pre_utility.unsqueeze(-1)
 
         self.tmp_radii = radii
         self.densify_and_clone(grads, max_grad, extent, densification_scores)
@@ -488,9 +548,8 @@ class GaussianModel:
 
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if use_segs_score and prune_score_threshold > 0.0 and densification_scores is not None:
-            redundant = densification_scores < (max_grad * prune_score_threshold)
-            if redundant.shape[0] < prune_mask.shape[0]:
-                redundant = torch.cat((redundant, torch.zeros(prune_mask.shape[0] - redundant.shape[0], device="cuda", dtype=bool)))
+            utility_score = self._segs_utility.squeeze() if hasattr(self, "_segs_utility") else densification_scores
+            redundant = utility_score < (max_grad * prune_score_threshold)
             low_error = (self.error_accum / self.denom.clamp_min(1.0)).squeeze() < min_opacity
             prune_mask = torch.logical_or(prune_mask, torch.logical_and(redundant[:prune_mask.shape[0]], low_error))
         if max_screen_size:
@@ -498,6 +557,9 @@ class GaussianModel:
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
+        if hasattr(self, "_segs_utility"):
+            del self._segs_utility
+        self.reset_densification_stats()
         tmp_radii = self.tmp_radii
         self.tmp_radii = None
 
