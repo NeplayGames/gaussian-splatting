@@ -1,5 +1,29 @@
 # SEGS Gaussian Splatting Research Fork
 
+## One-command local demo (reduced budget)
+
+```bash
+git clone --recursive <repo>
+cd gaussian-splatting
+./run_demo.sh
+```
+
+This demo is local-only: datasets are downloaded to the user's machine, CUDA extensions are checked/used locally, training runs on the local NVIDIA GPU, and generated models/results remain under `demo_output/` and the local cache. GitHub performs no computation, no remote GPU or hosted training job is used, and generated model artifacts are not stored on GitHub.
+
+Supported environment: Linux with an NVIDIA CUDA-capable GPU, working NVIDIA driver/CUDA PyTorch installation, initialized submodules, Python dependencies from this repository, and enough free disk space for the official dataset plus two local training outputs. The script fails early if CUDA, required tools, submodules, Python packages, or CUDA extensions are missing.
+
+The default run is a reduced-budget professor demonstration: scene `truck`, methods `baseline,segs_full`, seed `0`, test split, viewer disabled, and `1000` training iterations. These numbers are reduced-budget demonstration results, not final thesis results, and they depend on the user's hardware and software environment.
+
+Additional modes:
+
+```bash
+./run_demo.sh --resume   # reuse validated downloads and completed train/render/metrics steps
+./run_demo.sh --full     # full configured experiment with 30,000 iterations; much slower
+```
+
+Outputs are written to `demo_output/`, including `environment.json`, `dataset_validation.json`, `results.csv`, `report.html`, readable logs, trained models, and renders. For a clean-machine validation, clone recursively, install the documented dependencies/CUDA-enabled PyTorch, then run `./run_demo.sh`; failures print a short reason and the exact log directory.
+
+
 This repository is a SEGS research fork of 3D Gaussian Splatting. It preserves the original research runner while adding a local-only quick-start demonstration for comparing `baseline` and `segs_full` on `truck` and `drjohnson`. EGGS is not implemented; use `segs_edge_only` for the edge-only method.
 
 ## Quick Start: local SEGS demo
