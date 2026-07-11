@@ -1,4 +1,4 @@
-import json, os, time, subprocess
+import json, math, os, subprocess, time
 from pathlib import Path
 from experiments.command_builder import render_command, train_command, validate_method
 from experiments.subprocess_runner import run_command, StepError
@@ -9,10 +9,6 @@ def _git_commit():
         return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     except Exception:
         return "unknown"
-
-
-def _dir_size(path):
-    return sum(p.stat().st_size for p in Path(path).rglob('*') if p.is_file())
 
 
 def _count_ply_vertices(path):
@@ -28,6 +24,52 @@ def _count_ply_vertices(path):
     return None
 
 
+def valid_training_output(model_dir, iteration):
+    model_dir = Path(model_dir)
+    ply = model_dir / 'point_cloud' / f'iteration_{iteration}' / 'point_cloud.ply'
+    budget_path = model_dir / 'optimization_budget.json'
+    if not ply.exists() or (ply.stat().st_size <= 0):
+        return False
+    count = _count_ply_vertices(ply)
+    if count is None or count <= 0:
+        return False
+    if not budget_path.exists():
+        return False
+    try:
+        budget = json.loads(budget_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    recorded = budget.get('final_iteration', budget.get('iteration'))
+    return recorded == iteration
+
+
+def _pngs(path):
+    return sorted(Path(path).glob('*.png')) if Path(path).is_dir() else []
+
+
+def valid_render_output(model_dir, split, iteration):
+    root = Path(model_dir) / split / f'ours_{iteration}'
+    renders = _pngs(root / 'renders')
+    gt = _pngs(root / 'gt')
+    return len(renders) > 0 and len(renders) == len(gt)
+
+
+def valid_metrics_output(model_dir, split, iteration):
+    metrics_path = Path(model_dir) / 'metrics.json'
+    if not metrics_path.exists():
+        return False
+    try:
+        data = json.loads(metrics_path.read_text())
+        vals = data[f'{split}/ours_{iteration}']
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return False
+    for key in ('PSNR', 'SSIM', 'LPIPS'):
+        value = vals.get(key)
+        if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            return False
+    return True
+
+
 def _load_metrics(model_dir, split, iteration):
     metrics_path = Path(model_dir) / 'metrics.json'
     data = json.loads(metrics_path.read_text())
@@ -41,6 +83,7 @@ def _load_budget(model_dir):
         return {}
     return json.loads(path.read_text())
 
+
 def _budget_value(budget, *names, default='unavailable'):
     for name in names:
         if name in budget and budget[name] is not None:
@@ -50,6 +93,12 @@ def _budget_value(budget, *names, default='unavailable'):
 
 def _status(logs, step):
     return json.loads((Path(logs) / f'{step}_status.json').read_text())
+
+
+def _run_validated(command, logs, step, resume, validator):
+    if resume and validator():
+        return 'skipped'
+    return run_command(command, logs, step, resume=False)
 
 
 def run_demo(config, manifest, output_dir, scene_roots=None, iterations=1000, resume=False):
@@ -71,9 +120,9 @@ def run_demo(config, manifest, output_dir, scene_roots=None, iterations=1000, re
             metrics_cmd=[os.sys.executable, 'metrics.py', '-m', str(model_dir)]
             (logs/'commands.json').write_text(json.dumps({'train':train_cmd,'render':render_cmd,'metrics':metrics_cmd}, indent=2))
             try:
-                run_command(train_cmd, logs, 'train', resume=resume, expected_artifacts=[model_dir/'point_cloud'/f'iteration_{iterations}'/'point_cloud.ply', model_dir/'optimization_budget.json'])
-                run_command(render_cmd, logs, 'render', resume=resume, expected_artifacts=[model_dir/split/f'ours_{iterations}'/'renders', model_dir/split/f'ours_{iterations}'/'gt'])
-                run_command(metrics_cmd, logs, 'metrics', resume=resume, expected_artifacts=[model_dir/'metrics.json'])
+                _run_validated(train_cmd, logs, 'train', resume, lambda: valid_training_output(model_dir, iterations))
+                _run_validated(render_cmd, logs, 'render', resume, lambda: valid_render_output(model_dir, split, iterations))
+                _run_validated(metrics_cmd, logs, 'metrics', resume, lambda: valid_metrics_output(model_dir, split, iterations))
             except StepError as e:
                 raise StepError(f"{e}. Log directory: {logs.resolve()}") from e
             train_status=_status(logs,'train'); budget=_load_budget(model_dir)
@@ -81,7 +130,7 @@ def run_demo(config, manifest, output_dir, scene_roots=None, iterations=1000, re
             ply=model_dir/'point_cloud'/f'iteration_{iterations}'/'point_cloud.ply'
             rec={"dataset":dataset_label,"scene":scene_name,"method":method,"seed":seed,"iteration":iterations,
                  "split":split,"psnr":round(vals['psnr'],6),"ssim":round(vals['ssim'],6),"lpips":round(vals['lpips'],6),
-                 "gaussian_count":_budget_value(budget, 'gaussian_count', default=_count_ply_vertices(ply)),"model_size_bytes":_budget_value(budget, 'model_file_size_bytes', 'point_cloud_file_size_bytes', default=(ply.stat().st_size if ply.exists() else 'unavailable')),
+                 "gaussian_count":_budget_value(budget, 'gaussian_count', 'final_gaussian_count', default=_count_ply_vertices(ply)),"model_size_bytes":_budget_value(budget, 'model_file_size_bytes', 'point_cloud_file_size_bytes', default=(ply.stat().st_size if ply.exists() else 'unavailable')),
                  "training_time_seconds":round(_budget_value(budget, 'total_training_time_seconds', 'training_duration_seconds', default=train_status.get('elapsed_seconds',0)),3),
                  "peak_gpu_memory_bytes":_budget_value(budget, 'peak_gpu_memory_bytes', 'peak_gpu_memory_allocated_bytes'),
                  "fps":round(_budget_value(budget, 'render_fps', 'render_fps_recorded_during_training', default=0.0),3),

@@ -1,27 +1,55 @@
 # SEGS Gaussian Splatting Research Fork
 
-## One-command local demo (reduced budget)
+## One-command local demo for professor review (local NVIDIA machine)
 
 ```bash
-git clone --recursive <repo>
+git clone --recursive <repository>
 cd gaussian-splatting
 ./run_demo.sh
 ```
 
-This demo is local-only: datasets are downloaded to the user's machine, CUDA extensions are checked/used locally, training runs on the local NVIDIA GPU, and generated models/results remain under `demo_output/` and the local cache. GitHub performs no computation, no remote GPU or hosted training job is used, and generated model artifacts are not stored on GitHub.
+This workflow is intentionally **local-only**. The professor's computer performs environment setup, dependency installation, CUDA-extension compilation, dataset download/extraction/validation, baseline training, `segs_full` training, rendering, metrics, and report generation. This repository does not add or require GitHub Actions, cloud testing, remote GPU jobs, hosted execution, uploaded datasets/models, or GitHub-generated artifacts.
 
-Supported environment: Linux with an NVIDIA CUDA-capable GPU, working NVIDIA driver/CUDA PyTorch installation, initialized submodules, Python dependencies from this repository, and enough free disk space for the official dataset plus two local training outputs. The script fails early if CUDA, required tools, submodules, Python packages, or CUDA extensions are missing.
+### Supported system and hardware
 
-The default run is a reduced-budget professor demonstration: scene `truck`, methods `baseline,segs_full`, seed `0`, test split, viewer disabled, and `1000` training iterations. These numbers are reduced-budget demonstration results, not final thesis results, and they depend on the user's hardware and software environment.
+* **Operating system:** Linux is supported for the one-command demo; Ubuntu 22.04 LTS is the recommended target.
+* **GPU:** A CUDA-capable NVIDIA GPU visible through `nvidia-smi` is required.
+* **CUDA build tools:** `nvcc`, `g++`, `git`, CMake, and Ninja must be available locally so PyTorch CUDA extensions can compile on the professor's machine. `run_demo.sh` checks the external tools before compilation and prints a short explanation if any are missing.
+* **Python environment:** The script prefers Conda with `environment-demo.yml`. If Conda is unavailable, it reuses or creates `.venv` and installs the same local runtime dependencies with `pip`, including `pandas`, `openpyxl`, `cmake`, and `ninja`.
+* **Disk space:** Plan for at least several tens of GB free: the dataset archive/cache, extracted scenes, two local training outputs (`baseline` and `segs_full`), renders, logs, and reports are all stored on the local machine. Use more space for `--full` runs.
+
+The default professor demo is reduced budget: scene `truck`, methods `baseline,segs_full`, seed `0`, test split, viewer disabled, and `1000` training iterations. Reduced-budget results are for bug-finding and workflow review, not final thesis-quality numbers.
 
 Additional modes:
 
 ```bash
-./run_demo.sh --resume   # reuse validated downloads and completed train/render/metrics steps
-./run_demo.sh --full     # full configured experiment with 30,000 iterations; much slower
+./run_demo.sh --resume   # reuse valid environment, downloads, compiled extensions, and validated completed outputs
+./run_demo.sh --full     # configured 30,000-iteration experiment; much slower and larger
 ```
 
-Outputs are written to `demo_output/`, including `environment.json`, `dataset_validation.json`, `results.csv`, `report.html`, readable logs, trained models, and renders. For a clean-machine validation, clone recursively, install the documented dependencies/CUDA-enabled PyTorch, then run `./run_demo.sh`; failures print a short reason and the exact log directory.
+### Logs, results, and resume behavior
+
+Outputs are written under `demo_output/`:
+
+* `demo_output/environment.json` records local Python, CUDA, tool, package, disk, and submodule checks.
+* `demo_output/logs/setup/` stores environment creation/update, dependency installation, submodule, and CUDA-extension compilation logs. If setup fails, the script prints `Demo setup failed during: <step>` and `See log: <path>`.
+* `demo_output/logs/<scene>/<method>/` stores train/render/metrics commands, stdout/stderr logs, status files, and a local-results disclaimer.
+* `demo_output/models/` stores locally trained models and PLY outputs.
+* `demo_output/results.csv` and `demo_output/report.html` summarize the local run.
+
+Resume mode is conservative. Training is reused only when the requested iteration's PLY exists, has a positive Gaussian count, `optimization_budget.json` exists, and that budget records the requested iteration. Rendering is reused only when render and ground-truth PNG directories for the requested split/iteration exist with the same positive image count. Metrics are reused only when `metrics.json` contains finite numeric PSNR, SSIM, and LPIPS for the requested split/iteration. Invalid or stale steps are rerun.
+
+### Reporting a local failure
+
+When reporting a bug, please include:
+
+```text
+demo_output/environment.json
+demo_output/logs/setup/
+demo_output/logs/<scene>/<method>/
+```
+
+Do not upload datasets or trained models unless explicitly requested. CPU-safe tests can check command construction and resume validation, but full training/rendering/CUDA validation must be performed manually on a supported NVIDIA computer.
 
 
 This repository is a SEGS research fork of 3D Gaussian Splatting. It preserves the original research runner while adding a local-only quick-start demonstration for comparing `baseline` and `segs_full` on `truck` and `drjohnson`. EGGS is not implemented; use `segs_edge_only` for the edge-only method.

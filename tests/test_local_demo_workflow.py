@@ -1,10 +1,9 @@
-import json
+import json, math
 from pathlib import Path
 from experiments.command_builder import train_command, render_command
 from tools.quickstart import load_config, filter_scenes
 from tools.asset_manager import load_manifest, validate_manifest
-from tools.demo_runner import _load_metrics
-from experiments.subprocess_runner import run_command
+from tools.demo_runner import _load_metrics, valid_training_output, valid_render_output, valid_metrics_output
 
 
 def test_command_generation_iteration_and_methods(tmp_path):
@@ -33,28 +32,40 @@ def test_result_parsing(tmp_path):
     assert _load_metrics(model,'test',1000)['psnr']==1.2
 
 
-def test_resume_behavior_skips_success(tmp_path):
-    log=tmp_path/'logs'; log.mkdir()
-    (log/'step_status.json').write_text(json.dumps({'status':'success'}))
-    assert run_command(['python','-c','raise SystemExit(9)'], log, 'step', resume=True) == 'skipped'
-
-
-def test_resume_success_requires_expected_artifacts(tmp_path):
-    log=tmp_path/'logs'; log.mkdir()
-    artifact=tmp_path/'artifact.txt'
-    (log/'step_status.json').write_text(json.dumps({'status':'success'}))
-    assert run_command(['python','-c',f"from pathlib import Path; Path(r'{artifact}').write_text('ok')"], log, 'step', resume=True, expected_artifacts=[artifact]) == 'success'
-    assert artifact.read_text() == 'ok'
-    assert run_command(['python','-c','raise SystemExit(9)'], log, 'step', resume=True, expected_artifacts=[artifact]) == 'skipped'
-
-
-def test_demo_record_uses_budget_not_render_elapsed_or_model_directory_size(tmp_path):
-    from tools.demo_runner import _budget_value
+def test_training_resume_requires_positive_ply_and_matching_budget(tmp_path):
     model=tmp_path/'m'; ply=model/'point_cloud'/'iteration_1000'/'point_cloud.ply'; ply.parent.mkdir(parents=True)
-    ply.write_text('ply\nelement vertex 7\nend_header\n')
-    render=(model/'test'/'ours_1000'/'renders'); render.mkdir(parents=True)
-    (render/'00000.png').write_bytes(b'x')
+    ply.write_text('ply\nformat ascii 1.0\nelement vertex 7\nend_header\n')
+    assert not valid_training_output(model, 1000)
+    (model/'optimization_budget.json').write_text(json.dumps({'final_iteration': 999}))
+    assert not valid_training_output(model, 1000)
+    (model/'optimization_budget.json').write_text(json.dumps({'final_iteration': 1000}))
+    assert valid_training_output(model, 1000)
+    ply.write_text('ply\nformat ascii 1.0\nelement vertex 0\nend_header\n')
+    assert not valid_training_output(model, 1000)
+
+
+def test_render_resume_requires_matching_positive_png_counts(tmp_path):
+    root=tmp_path/'m'/'test'/'ours_1000'
+    (root/'renders').mkdir(parents=True); (root/'gt').mkdir()
+    assert not valid_render_output(tmp_path/'m', 'test', 1000)
+    (root/'renders'/'000.png').write_bytes(b'x')
+    assert not valid_render_output(tmp_path/'m', 'test', 1000)
+    (root/'gt'/'000.png').write_bytes(b'x')
+    assert valid_render_output(tmp_path/'m', 'test', 1000)
+    assert not valid_render_output(tmp_path/'m', 'train', 1000)
+
+
+def test_metrics_resume_requires_finite_values_for_split_and_iteration(tmp_path):
+    model=tmp_path/'m'; model.mkdir()
     (model/'metrics.json').write_text(json.dumps({'test/ours_1000': {'PSNR': 1, 'SSIM': 2, 'LPIPS': 3}}))
+    assert valid_metrics_output(model, 'test', 1000)
+    assert not valid_metrics_output(model, 'test', 999)
+    (model/'metrics.json').write_text(json.dumps({'test/ours_1000': {'PSNR': math.inf, 'SSIM': 2, 'LPIPS': 3}}))
+    assert not valid_metrics_output(model, 'test', 1000)
+
+
+def test_demo_record_uses_budget_not_render_elapsed_or_model_directory_size():
+    from tools.demo_runner import _budget_value
     budget={'peak_gpu_memory_bytes': 123, 'model_file_size_bytes': 456, 'render_fps': 78.9}
     assert _budget_value(budget, 'peak_gpu_memory_bytes') == 123
     assert _budget_value(budget, 'model_file_size_bytes') == 456
@@ -65,3 +76,11 @@ def test_metrics_uses_installed_lpips_package():
     source=Path('metrics.py').read_text()
     assert 'import lpips' in source
     assert 'from lpipsPyTorch import lpips' not in source
+
+
+def test_demo_dependency_declarations_include_local_requirements():
+    env=Path('environment-demo.yml').read_text()
+    script=Path('run_demo.sh').read_text()
+    for dep in ['pandas', 'openpyxl', 'cmake', 'ninja']:
+        assert dep in env
+        assert dep in script
