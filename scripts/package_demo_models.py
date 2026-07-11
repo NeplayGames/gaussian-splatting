@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-import argparse, hashlib, json, tarfile
+from __future__ import annotations
+import argparse, json, sys
 from pathlib import Path
-REQUIRED=["cfg_args","cfg_args.json","resolved_config.json","runtime_metadata.json","optimization_budget.json","point_cloud/iteration_30000/point_cloud.ply","MODEL_CARD.md"]
-def sha(path):
-    h=hashlib.sha256();
-    with open(path,'rb') as f:
-        for b in iter(lambda:f.read(1048576), b''): h.update(b)
-    return h.hexdigest()
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.demo_model_assets import *
+
 def main():
-    ap=argparse.ArgumentParser(); ap.add_argument('model_dir'); ap.add_argument('archive')
-    a=ap.parse_args(); root=Path(a.model_dir); missing=[p for p in REQUIRED if not (root/p).exists()]
-    if missing: raise SystemExit(f"Missing required model files: {missing}")
-    with tarfile.open(a.archive, 'w:gz', format=tarfile.PAX_FORMAT) as tf:
-        for p in sorted(root.rglob('*')):
-            if p.is_file(): tf.add(p, p.relative_to(root), recursive=False)
-    out=Path(a.archive)
-    print(json.dumps({"archive_filename":out.name,"size_bytes":out.stat().st_size,"sha256":sha(out),"required_files":REQUIRED}, indent=2))
+    p=argparse.ArgumentParser(description='Validate and deterministically package one SEGS demo model.')
+    p.add_argument('--model-root', required=True); p.add_argument('--scene', required=True, choices=SCENES); p.add_argument('--method', required=True, choices=METHODS); p.add_argument('--seed', type=int, default=SEED); p.add_argument('--iteration', type=int, default=ITERATION); p.add_argument('--output-dir', required=True); p.add_argument('--url', default=''); p.add_argument('--information-url', default='')
+    a=p.parse_args(); root=Path(a.model_root)
+    result=validate_model_directory(root, a.scene, a.method, a.seed, a.iteration, require_load_test=True)
+    out=Path(a.output_dir)/archive_name(a.scene,a.method,a.seed,a.iteration); top=model_root_name(a.scene,a.method,a.seed,a.iteration)
+    deterministic_tar_gz(root, out, top); inspect_archive(out, a.scene, a.method, a.seed, a.iteration)
+    manifest=manifest_ready_json(out, root, a.scene, a.method, info_url=a.information_url, url=a.url)
+    package_report={'archive_filename':out.name,'archive_sha256':manifest['sha256'],'archive_size_bytes':manifest['size_bytes'],'model_root':str(root),'scene':a.scene,'method':a.method,'seed':a.seed,'iteration':a.iteration,'config_hash':result['config_hash'],'manifest_entry':manifest}
+    write_json(Path(a.output_dir)/(out.name+'.manifest.json'), package_report)
+    print(json.dumps(package_report, indent=2, sort_keys=True))
 if __name__=='__main__': main()

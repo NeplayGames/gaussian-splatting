@@ -18,3 +18,7 @@ results/raw/
 *.tar.zst
 *.part
 configs/datasets.local.yaml
+
+# Local demo model training and packaging outputs
+demo_model_training/
+packaged_demo_models/

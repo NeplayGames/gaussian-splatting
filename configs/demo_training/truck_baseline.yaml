@@ -1,0 +1,78 @@
+{
+  "background": {
+    "random_background": false,
+    "white_background": false
+  },
+  "checkpoint_iterations": [],
+  "controls": {
+    "constant_scale_control": false,
+    "shuffled_map_control": false
+  },
+  "dataset": "graphdeco-tandt-db-2023",
+  "densification": {
+    "densification_interval": 100,
+    "densify_from_iter": 500,
+    "densify_grad_threshold": 0.0002,
+    "densify_until_iter": 15000,
+    "mode": "standard_upstream",
+    "opacity_reset_interval": 3000
+  },
+  "evaluation": {
+    "enabled": true,
+    "split": "repository-default-eval"
+  },
+  "exposure": {
+    "exposure_lr_delay_mult": 0.0,
+    "exposure_lr_delay_steps": 0,
+    "exposure_lr_final": 0.001,
+    "exposure_lr_init": 0.01,
+    "train_test_exp": false
+  },
+  "image_directory": "images",
+  "image_resolution": -1,
+  "iterations": 30000,
+  "method": "baseline",
+  "optimization": {
+    "feature_lr": 0.0025,
+    "lambda_dssim": 0.2,
+    "objective": "standard_l1_plus_dssim",
+    "opacity_lr": 0.05,
+    "percent_dense": 0.01,
+    "position_lr_delay_mult": 0.01,
+    "position_lr_final": 1.6e-06,
+    "position_lr_init": 0.00016,
+    "position_lr_max_steps": 30000,
+    "rotation_lr": 0.001,
+    "scaling_lr": 0.005
+  },
+  "pruning": {
+    "mode": "standard_upstream",
+    "opacity_threshold": 0.005,
+    "size_threshold_after_opacity_reset": 20
+  },
+  "rendering": {
+    "antialiasing": false,
+    "compute_cov3D_python": false,
+    "convert_SHs_python": false,
+    "spherical_harmonic_degree": 3
+  },
+  "save_iterations": [
+    30000
+  ],
+  "scene": "truck",
+  "seed": 0,
+  "segs": {
+    "adaptive_curriculum": false,
+    "densification_only": false,
+    "edge_only": false,
+    "edge_weighting": false,
+    "importance_aware_densification": false,
+    "saliency_only": false,
+    "saliency_weighting": false,
+    "segs_pruning": false
+  },
+  "test_iterations": [
+    7000,
+    30000
+  ]
+}
