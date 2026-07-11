@@ -5,4 +5,16 @@ build
 diff_rasterization/diff_rast.egg-info
 diff_rasterization/dist
 tensorboard_3d
-screenshots
+screenshotsdata/
+datasets/
+downloads/
+checkpoints/
+demo_output/
+eval/
+results/raw/
+*.zip
+*.tar
+*.tar.gz
+*.tar.zst
+*.part
+configs/datasets.local.yaml

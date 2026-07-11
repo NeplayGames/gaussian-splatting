@@ -93,7 +93,6 @@ def _sample_gaussian_image_metrics(viewpoint_cam, gaussians, visibility_filter, 
 
 SEGS_METHODS = [
     "baseline",
-    "eggs",
     "segs_edge_only",
     "segs_saliency_only",
     "segs_loss",
@@ -118,7 +117,7 @@ def _configure_segs_method(args):
 
     if args.method == "baseline":
         return
-    if args.method in ("eggs", "segs_edge_only"):
+    if args.method == "segs_edge_only":
         args.use_edge = True
     elif args.method == "segs_saliency_only":
         args.use_saliency = True
@@ -497,7 +496,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--method", type=str, default="baseline", choices=SEGS_METHODS)
+    parser.add_argument("--method", type=str, default="baseline")
     parser.add_argument("--use_edge", action="store_true", default=False)
     parser.add_argument("--use_saliency", action="store_true", default=False)
     parser.add_argument("--edge_name", type=str, default="sobel", choices=["sobel"])
@@ -519,6 +518,10 @@ if __name__ == "__main__":
     parser.add_argument("--segs_confidence_power", type=float, default=0.5)
     parser.add_argument("--segs_prune_score_threshold", type=float, default=0.0)
     args = parser.parse_args(sys.argv[1:])
+    if args.method == "eggs":
+        parser.error("Unsupported method 'eggs'. EGGS is not implemented; use 'segs_edge_only' for the edge-only method.")
+    if args.method not in SEGS_METHODS:
+        parser.error(f"Unsupported method {args.method!r}. Supported methods: {', '.join(SEGS_METHODS)}")
     _configure_segs_method(args)
     args.save_iterations.append(args.iterations)
     

@@ -6,7 +6,6 @@
 
 import json
 import os
-import subprocess
 import sys
 import time
 from argparse import ArgumentParser
@@ -14,7 +13,6 @@ from pathlib import Path
 
 METHODS = [
     "baseline",
-    "eggs",
     "segs_edge_only",
     "segs_saliency_only",
     "segs_loss",
@@ -41,26 +39,8 @@ def parse_csv(value, cast=str):
     return [cast(item) for item in value.split(",") if item]
 
 
-def run_step(command, run_dir, step_name, resume=False):
-    run_dir.mkdir(parents=True, exist_ok=True)
-    status_path = run_dir / f"{step_name}_status.json"
-    if resume and status_path.exists():
-        try:
-            if json.loads(status_path.read_text()).get("status") == "success":
-                return "skipped"
-        except json.JSONDecodeError:
-            pass
-    started = time.time()
-    with (run_dir / f"{step_name}.stdout.log").open("w") as stdout_f, (run_dir / f"{step_name}.stderr.log").open("w") as stderr_f:
-        try:
-            subprocess.run(command, check=True, stdout=stdout_f, stderr=stderr_f)
-        except subprocess.CalledProcessError as exc:
-            status = {"status": "failed", "returncode": exc.returncode, "command": command, "elapsed_seconds": time.time() - started}
-            status_path.write_text(json.dumps(status, indent=2))
-            raise
-    status = {"status": "success", "returncode": 0, "command": command, "elapsed_seconds": time.time() - started}
-    status_path.write_text(json.dumps(status, indent=2))
-    return "success"
+from experiments.subprocess_runner import run_command as run_step
+from experiments.command_builder import validate_method
 
 
 def main():
@@ -101,7 +81,7 @@ def main():
     results = []
     for method in methods:
         if method not in METHODS:
-            raise ValueError(f"Unknown method: {method}")
+            validate_method(method, METHODS)
         for seed in seeds:
             model_root = output_root / f"{method}_seed{seed}"
             scenes_for_metrics = []

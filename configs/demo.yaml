@@ -1,0 +1,28 @@
+cache_dir: ~/.cache/segs-demo
+output_dir: ./demo_output
+iteration: 30000
+seed: 0
+minimum_disk_gb: 80
+scenes:
+  - dataset: tanks_and_temples
+    scene: truck
+  - dataset: deep_blending
+    scene: drjohnson
+methods: [baseline, segs_full]
+evaluation:
+  split: test
+  metrics: [psnr, ssim, lpips]
+rendering:
+  quiet: true
+  identical_camera_order: true
+benchmark:
+  warmup_frames: 10
+  measured_frames: 100
+report:
+  html: true
+  console_table: true
+  open_browser: true
+  comparison_images: 4
+supported_environment:
+  python: '>=3.8,<3.12'
+  cuda_required: true
