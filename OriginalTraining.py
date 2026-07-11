@@ -11,6 +11,7 @@
 
 import os
 import math
+import time
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
@@ -26,7 +27,7 @@ from arguments import ModelParams, PipelineParams, OptimizationParams
 from LossCombiner import LossCombiner
 import Edges
 import Saliency
-from TrainingReport import log_metrics_to_excel
+from TrainingReport import log_metrics_to_excel, collect_optimization_budget
 import random, numpy as np, torch, os
 import torch
 import torch.nn.functional as F
@@ -153,22 +154,29 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     use_sparse_adam = opt.optimizer_type == "sparse_adam" and SPARSE_ADAM_AVAILABLE 
     depth_l1_weight = get_expon_lr_func(opt.depth_l1_weight_init, opt.depth_l1_weight_final, max_steps=opt.iterations)
 
-    viewpoint_stack = scene.getTrainCameras().copy()
+    train_cameras = scene.getTrainCameras().copy()
+    validation_cameras = []
+    if getattr(args, "enable_early_stopping", False):
+        if not 0.0 < args.validation_fraction < 1.0:
+            raise ValueError("--validation_fraction must be between 0 and 1 for early stopping.")
+        validation_count = max(1, int(len(train_cameras) * args.validation_fraction)) if len(train_cameras) > 1 else 0
+        validation_cameras = train_cameras[-validation_count:] if validation_count else []
+        train_cameras = train_cameras[:-validation_count] if validation_count else train_cameras
+        if not train_cameras:
+            raise ValueError("Validation split consumed all training cameras; reduce --validation_fraction.")
+        print(f"[Validation] Holding out {len(validation_cameras)} training cameras for early stopping; test cameras are reserved for final evaluation only.")
+    viewpoint_stack = train_cameras.copy()
     viewpoint_indices = list(range(len(viewpoint_stack)))
     ema_loss_for_log = 0.0
     ema_Ll1depth_for_log = 0.0
     iteration = first_iter + 1
-    best_metrics = {
-        "psnr": float("-inf"),
-        "ssim": float("-inf"),
-        "ms_ssim": float("-inf"),
-        "lpips": float("inf"),        # lower is better
-        "edge_sim": float("-inf"),
-        "saliency_sim": float("-inf"),
-    }
-    best_psnr = 0
-    patience = 10
+    best_validation_psnr = float("-inf")
+    patience = args.early_stopping_patience
     stale_counter = 0
+    stop_training = False
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    training_start = time.perf_counter()
 
     progress_bar = tqdm(desc="Training progress (deterministic)")
 
@@ -176,7 +184,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     # train_cameras = scene.getTrainCameras()
     # num_cameras = len(train_cameras)
 
-    while True:
+    while iteration <= opt.iterations:
 
         if network_gui.conn is None:
             network_gui.try_connect()
@@ -207,7 +215,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
          # Pick a random Camera
         if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
+            viewpoint_stack = train_cameras.copy()
             viewpoint_indices = list(range(len(viewpoint_stack)))
         rand_idx = randint(0, len(viewpoint_indices) - 1)
         viewpoint_cam = viewpoint_stack.pop(rand_idx)
@@ -289,9 +297,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
-            # if (iteration in saving_iterations):
-            #     print("\n[ITER {}] Saving Gaussians".format(iteration))
-            #     scene.save(iteration)
+            if (iteration in saving_iterations) or (iteration == opt.iterations):
+                print("\n[ITER {}] Saving Gaussians".format(iteration))
+                scene.save(iteration)
 
             # Densification
             if iteration < opt.densify_until_iter:
@@ -335,63 +343,58 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-        if iteration % 2000 == 0:
-            # Run evaluation (returns dict of metrics)    
-
-            psnr_val = DetermineTestPSNR(
-                    tb_writer, iteration,  scene,
-                    render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp),
-                    dataset.train_test_exp
-                )
-            #def DetermineTestPSNR(tb_writer, iteration, scene, renderFunc, renderArgs, train_test_exp):
-            # --- Check for improvement (PSNR as criterion) ---
-            if psnr_val > best_psnr:
-                best_psnr = psnr_val
-                
-
+        if getattr(args, "enable_early_stopping", False) and validation_cameras and iteration % args.early_stopping_interval == 0:
+            validation_psnr = DetermineCamerasPSNR(
+                tb_writer, iteration, validation_cameras, "validation", scene,
+                render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp),
+                dataset.train_test_exp
+            )
+            if validation_psnr > best_validation_psnr:
+                best_validation_psnr = validation_psnr
                 stale_counter = 0
-                print(f"\n✨ New best PSNR: {best_psnr:.4f}")
-                # Optionally: save best model here
-                # scene.save(iteration)
+                print(f"\n✨ New best validation PSNR: {float(best_validation_psnr):.4f}")
             else:
                 stale_counter += 1
-                print(f"PSNR did not improve. Patience counter = {stale_counter}/{patience}")
+                print(f"Validation PSNR did not improve. Patience counter = {stale_counter}/{patience}")
 
-            # --- Early stopping ---
-            #if iteration % 30000 == 0:
             if stale_counter >= patience:
-            #if psnr_val >= 25:
-                scene.save(iteration)
-            #
-                metrics = DetermineTestMetrics(
-                    tb_writer, iteration, testing_iterations, scene,
-                    render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp),
-                    dataset.train_test_exp, combiner
-                )
-                if metrics is not None:
-                    # Convert tensors → floats
-                    metrics = {k: (v.detach().item() if torch.is_tensor(v) else float(v)) 
-                            for k, v in metrics.items()}
-                    best_metrics["psnr"] = best_psnr
-                    best_metrics["ssim"] = metrics["ssim"]
-                    best_metrics["ms_ssim"] = metrics["ms_ssim"]
-                    best_metrics["lpips"] = metrics["lpips"]
-                    best_metrics["edge_sim"] = metrics["edge_sim"]
-                    best_metrics["saliency_sim"] = metrics["saliency_sim"]
-                    log_metrics_to_excel(
-                        iteration,
-                        best_metrics,  # pass the full dict
-                        args.model_path,
-                        lambda_edge=args.lambda_edge,
-                        lambda_saliency=args.lambda_saliency,                        
-                        use_edge=args.use_edge,
-                        use_saliency=args.use_saliency,
-                        use_method = args.saliency_name,
-                        total_Time= iter_start.elapsed_time(iter_end),
-                    )
-                print(f"\n⏹️ Stopping training: no PSNR improvement after {patience} evaluations.")
-                break
+                print(f"\n⏹️ Stopping training: no validation PSNR improvement after {patience} evaluations.")
+                stop_training = True
 
+        if (iteration == opt.iterations) or stop_training:
+            if iteration not in saving_iterations:
+                print("\n[ITER {}] Saving final Gaussians".format(iteration))
+                scene.save(iteration)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            total_training_seconds = time.perf_counter() - training_start
+            metrics = DetermineTestMetrics(
+                tb_writer, iteration, testing_iterations, scene,
+                render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp),
+                dataset.train_test_exp, combiner
+            )
+            if metrics is not None:
+                metrics = {k: (v.detach().item() if torch.is_tensor(v) else float(v))
+                        for k, v in metrics.items()}
+                measured_render_fps = metrics.pop("render_fps", None)
+                budget = collect_optimization_budget(
+                    model_path=args.model_path,
+                    gaussians=gaussians,
+                    render_fps=measured_render_fps,
+                )
+                log_metrics_to_excel(
+                    iteration,
+                    metrics,
+                    args.model_path,
+                    lambda_edge=args.lambda_edge,
+                    lambda_saliency=args.lambda_saliency,
+                    use_edge=args.use_edge,
+                    use_saliency=args.use_saliency,
+                    use_method=args.saliency_name,
+                    total_Time=total_training_seconds,
+                    budget=budget,
+                )
+            break
 
         iteration = iteration + 1
 
@@ -512,21 +515,52 @@ def DetermineTestPSNR(tb_writer, iteration, scene, renderFunc, renderArgs, train
     torch.cuda.empty_cache()
     return psnr_test
 
+def DetermineCamerasPSNR(tb_writer, iteration, cameras, name, scene, renderFunc, renderArgs, train_test_exp):
+    """Evaluate PSNR on an explicit non-test camera split for model selection."""
+    torch.cuda.empty_cache()
+    psnr_value = 0.0
+    if cameras and len(cameras) > 0:
+        with torch.no_grad():
+            for idx, viewpoint in enumerate(cameras):
+                image = torch.clamp(
+                    renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"],
+                    0.0, 1.0
+                )
+                gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+                if train_test_exp:
+                    image = image[..., image.shape[-1] // 2:]
+                    gt_image = gt_image[..., gt_image.shape[-1] // 2:]
+                if tb_writer and idx < 5:
+                    tb_writer.add_images(f"{name}_view_{viewpoint.image_name}/render", image[None], global_step=iteration)
+                psnr_value += psnr(image, gt_image).mean().double()
+            psnr_value /= len(cameras)
+            if tb_writer:
+                tb_writer.add_scalar(f"{name}/psnr", psnr_value, iteration)
+    torch.cuda.empty_cache()
+    return psnr_value
+
 def DetermineTestMetrics(tb_writer, iteration, testing_iterations, scene, renderFunc, renderArgs, train_test_exp, combiner):
     torch.cuda.empty_cache()
 
     test_cameras = scene.getTestCameras()
     psnr_test, ssim_test, ms_ssim_test, lpips_test = 0.0, 0.0, 0.0, 0.0
+    render_time_seconds = 0.0
     edge_sim, saliency_sim = 0.0, 0.0
 
     if test_cameras and len(test_cameras) > 0:
         with torch.no_grad():
             for idx, viewpoint in enumerate(test_cameras):
                 # Render and clamp
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                render_start = time.perf_counter()
                 image = torch.clamp(
                     renderFunc(viewpoint, scene.gaussians, *renderArgs)["render"],
                     0.0, 1.0
                 )
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                render_time_seconds += time.perf_counter() - render_start
                 gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
 
                 # Optional crop
@@ -569,6 +603,8 @@ def DetermineTestMetrics(tb_writer, iteration, testing_iterations, scene, render
             saliency_sim /= n
 
             # Log scalars
+            render_fps = n / render_time_seconds if render_time_seconds > 0 else None
+
             if tb_writer:
                 tb_writer.add_scalar("test/psnr", psnr_test, iteration)
                 tb_writer.add_scalar("test/ssim", ssim_test, iteration)
@@ -576,15 +612,24 @@ def DetermineTestMetrics(tb_writer, iteration, testing_iterations, scene, render
                 tb_writer.add_scalar("test/lpips", lpips_test, iteration)
                 tb_writer.add_scalar("test/edge_similarity", edge_sim, iteration)
                 tb_writer.add_scalar("test/saliency_similarity", saliency_sim, iteration)
+                if render_fps is not None:
+                    tb_writer.add_scalar("test/render_fps", render_fps, iteration)
 
     torch.cuda.empty_cache()
+
+    def scalar_or_none(value):
+        if value is None:
+            return None
+        return value.item() if hasattr(value, "item") else value
+
     return {
-        "psnr": psnr_test.item(),
-        "ssim": ssim_test,
-        "ms_ssim": ms_ssim_test,
-        "lpips": lpips_test,
-        "edge_sim": edge_sim,
-        "saliency_sim": saliency_sim
+        "psnr": scalar_or_none(psnr_test),
+        "ssim": scalar_or_none(ssim_test),
+        "ms_ssim": scalar_or_none(ms_ssim_test),
+        "lpips": scalar_or_none(lpips_test),
+        "edge_sim": scalar_or_none(edge_sim),
+        "saliency_sim": scalar_or_none(saliency_sim),
+        "render_fps": render_fps if 'render_fps' in locals() else None
     }
 
 if __name__ == "__main__":
@@ -619,8 +664,8 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7000, 15000, 30000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7000, 15000, 30000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
@@ -662,6 +707,14 @@ if __name__ == "__main__":
                         help="Exponent for multi-view visibility confidence in the SEGS densification score")
     parser.add_argument("--segs_prune_score_threshold", type=float, default=0.0,
                         help="Prune low-error Gaussians whose SEGS score is below this fraction of densify_grad_threshold")
+    parser.add_argument("--enable_early_stopping", action="store_true", default=False,
+                        help="Use a held-out validation split for early stopping; test views remain final-only.")
+    parser.add_argument("--validation_fraction", type=float, default=0.1,
+                        help="Fraction of training cameras held out for early stopping validation.")
+    parser.add_argument("--early_stopping_interval", type=int, default=2000,
+                        help="Validation interval for early stopping experiments.")
+    parser.add_argument("--early_stopping_patience", type=int, default=10,
+                        help="Number of validation checks without improvement before stopping.")
 
 
     args = parser.parse_args(sys.argv[1:])
