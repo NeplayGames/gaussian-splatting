@@ -111,7 +111,7 @@ def run_demo(config, manifest, output_dir, scene_roots=None, iterations=1000, re
             raise StepError(f"Scene root for {scene_name} is missing: {source}")
         dataset_label="Tanks and Temples" if scene_cfg.get('dataset')=='tanks_and_temples' or scene_name=='truck' else 'Deep Blending'
         for method in config['methods']:
-            validate_method(method, ('baseline','segs_full'))
+            validate_method(method)
             logs=out/'logs'/scene_name/method; logs.mkdir(parents=True, exist_ok=True)
             model_dir=out/'models'/scene_name/method; model_dir.mkdir(parents=True, exist_ok=True)
             (logs/'DISCLAIMER.txt').write_text('Reduced-budget demonstration results; not final thesis results unless --full was used and validated.\n')

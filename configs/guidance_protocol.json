@@ -1,0 +1,41 @@
+{
+  "name": "eggs_saliency_guidance_protocol",
+  "description": "Controlled EGGS plus saliency ablation matrix. Replace source paths with prepared Gaussian Splatting scene roots before running.",
+  "methods": [
+    "baseline",
+    "eggs_paper",
+    "eggs",
+    "saliency",
+    "eggs_saliency",
+    "eggs_norm",
+    "saliency_norm",
+    "eggs_saliency_norm"
+  ],
+  "saliency_methods": [
+    "BooleanMapApprox",
+    "IntensityCenterSurround"
+  ],
+  "scenes": [
+    {
+      "dataset": "tanks_and_temples",
+      "scene_name": "truck",
+      "source": "F:/Thesis/segs-demo-cache/datasets/graphdeco-tandt-db-2023/tandt/truck",
+      "image_dir": "images",
+      "white_background": false
+    },
+    {
+      "dataset": "deep_blending",
+      "scene_name": "drjohnson",
+      "source": "F:/Thesis/segs-demo-cache/datasets/graphdeco-tandt-db-2023/db/drjohnson",
+      "image_dir": "images",
+      "white_background": false
+    },
+    {
+      "dataset": "mipnerf360",
+      "scene_name": "bonsai",
+      "source": "F:/Thesis/segs-demo-cache/datasets/mipnerf360/bonsai",
+      "image_dir": "images",
+      "white_background": false
+    }
+  ]
+}

@@ -14,7 +14,7 @@ The demo training configs preserve upstream-style default 30,000-iteration optim
 - SEGS methods are exposed through the `--method` argument in `train.py`.
 - Baseline and SEGS-full demo jobs are driven by committed configs under `configs/demo_training/`.
 - Demo packaging requires resolved configuration, runtime metadata, optimization budget, model card, load-test status, and deterministic tar.gz archives.
-- EGGS is not implemented or exposed for the local SEGS demo.
+- `eggs` is exposed as the edge-only EGGS-style comparison, and `eggs_saliency` is exposed as the thesis method that adds saliency weighting to EGGS.
 
 ## Submodule commits used
 

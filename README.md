@@ -71,7 +71,7 @@ demo_output/logs/<scene>/<method>/
 Do not upload datasets or trained models unless explicitly requested. CPU-safe tests can check command construction and resume validation, but full training/rendering/CUDA validation must be performed manually on a supported NVIDIA computer.
 
 
-This repository is a SEGS research fork of 3D Gaussian Splatting. It preserves the original research runner while adding a local-only quick-start demonstration for comparing `baseline` and `segs_full` on `truck` and `drjohnson`. EGGS is not implemented; use `segs_edge_only` for the edge-only method.
+This repository is a thesis research fork of 3D Gaussian Splatting. It preserves the original research runner while adding image-space guidance methods: `eggs` for the edge-only EGGS-style baseline and `eggs_saliency` for the thesis method that adds saliency weighting to EGGS.
 
 ## Quick Start: local SEGS demo
 

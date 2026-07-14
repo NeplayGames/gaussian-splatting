@@ -82,7 +82,7 @@ class LossCombiner:
 
     def compute_raw_weight(self, gt_image):
         """
-        Build the unnormalized SEGS spatial weight map:
+        Build the unnormalized EGGS + saliency spatial weight map:
             w(u,v) = 1 + alpha E(u,v) + beta S(u,v)
 
         Output shape: [B, 1, H, W].
@@ -110,21 +110,21 @@ class LossCombiner:
 
     def compute_phi(self, gt_image):
         """
-        Build the normalized SEGS spatial weight map:
+        Build the configured EGGS + saliency spatial weight map:
             w(u,v) = 1 + alpha E(u,v) + beta S(u,v)
-            w_hat(u,v) = w(u,v) / (mean(w) + eps)
+            w_hat(u,v) = w(u,v) / (mean(w) + eps), when normalization is enabled
 
-        Output shape: [B, 1, H, W] with per-image spatial mean equal to one.
+        Output shape: [B, 1, H, W].
         """
         return self._normalize_weight(self.compute_raw_weight(gt_image))
 
 
     def compute_importance_map(self, gt_image):
-        """Return the normalized perceptual SEGS importance map used by loss and densification."""
+        """Return the configured image-space importance map used by loss and densification."""
         return self.compute_phi(gt_image)
 
     def compute_weighted_l1(self, pred, gt):
-        """Compute only the weighted L1 term used by SEGS.
+        """Compute only the weighted L1 term used by EGGS + saliency guidance.
 
         DSSIM is intentionally handled by the training loop so the standard
         3DGS L1/DSSIM blend is applied exactly once.

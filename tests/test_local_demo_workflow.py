@@ -7,10 +7,15 @@ from tools.demo_runner import _load_metrics, valid_training_output, valid_render
 
 
 def test_command_generation_iteration_and_methods(tmp_path):
-    cmd=train_command('/data/truck', tmp_path/'m', 'segs_full', 0, 1000)
+    cmd=train_command('/data/truck', tmp_path/'m', 'eggs_saliency', 0, 1000, saliency_name='IntensityCenterSurround', lambda_edge=0.3, lambda_saliency=0.2, eggs_beta=0.4, edge_p=2)
     assert '--iterations' in cmd and '1000' in cmd
     assert '--save_iterations' in cmd and '--test_iterations' in cmd
-    assert '--method' in cmd and 'segs_full' in cmd
+    assert '--method' in cmd and 'eggs_saliency' in cmd
+    assert '--saliency_name' in cmd and 'IntensityCenterSurround' in cmd
+    assert '--lambda_edge' in cmd and '0.3' in cmd
+    assert '--lambda_saliency' in cmd and '0.2' in cmd
+    assert '--eggs_beta' in cmd and '0.4' in cmd
+    assert '--edge_p' in cmd and '2' in cmd
     r=render_command('/data/truck', tmp_path/'m', 1000, 'test')
     assert '--iteration' in r and '1000' in r and '--skip_train' in r
 

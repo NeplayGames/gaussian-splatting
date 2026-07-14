@@ -10,30 +10,44 @@
       "size_bytes": 682628995,
       "license_url": "https://www.tanksandtemples.org/license/",
       "terms_url": "https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/",
-      "attribution": "Official GraphDECO-prepared Tanks and Temples Truck and Deep Blending DrJohnson COLMAP dataset archive referenced by the 3D Gaussian Splatting project.",
+      "attribution": "Official GraphDECO-prepared Tanks and Temples and Deep Blending COLMAP dataset archive referenced by the 3D Gaussian Splatting project.",
       "archive_filename": "tandt_db.zip",
       "expected_extracted_files": [
         "tandt/truck/images",
         "tandt/truck/sparse/0/cameras.bin",
         "tandt/truck/sparse/0/images.bin",
         "tandt/truck/sparse/0/points3D.bin",
+        "tandt/train/images",
+        "tandt/train/sparse/0/cameras.bin",
+        "tandt/train/sparse/0/images.bin",
+        "tandt/train/sparse/0/points3D.bin",
         "db/drjohnson/images",
         "db/drjohnson/sparse/0/cameras.bin",
         "db/drjohnson/sparse/0/images.bin",
-        "db/drjohnson/sparse/0/points3D.bin"
+        "db/drjohnson/sparse/0/points3D.bin",
+        "db/playroom/images",
+        "db/playroom/sparse/0/cameras.bin",
+        "db/playroom/sparse/0/images.bin",
+        "db/playroom/sparse/0/points3D.bin"
       ],
       "required_scenes": [
         "truck",
-        "drjohnson"
+        "train",
+        "drjohnson",
+        "playroom"
       ],
       "information_url": "https://github.com/graphdeco-inria/gaussian-splatting",
       "scene_paths": {
         "truck": "tandt/truck",
-        "drjohnson": "db/drjohnson"
+        "train": "tandt/train",
+        "drjohnson": "db/drjohnson",
+        "playroom": "db/playroom"
       },
       "extract_prefixes": [
         "tandt/truck/",
-        "db/drjohnson/"
+        "tandt/train/",
+        "db/drjohnson/",
+        "db/playroom/"
       ]
     }
   ],

@@ -93,6 +93,13 @@ def _sample_gaussian_image_metrics(viewpoint_cam, gaussians, visibility_filter, 
 
 SEGS_METHODS = [
     "baseline",
+    "eggs_paper",
+    "eggs",
+    "saliency",
+    "eggs_saliency",
+    "eggs_norm",
+    "saliency_norm",
+    "eggs_saliency_norm",
     "segs_edge_only",
     "segs_saliency_only",
     "segs_loss",
@@ -109,6 +116,7 @@ def _configure_segs_method(args):
     args.use_edge = False
     args.use_saliency = False
     args.adaptive_curriculum = False
+    args.eggs_style_loss = False
     args.segs_densification = False
     requested_weighting_control = getattr(args, "weighting_control", False)
     requested_shuffle_map_control = getattr(args, "shuffle_map_control", False)
@@ -117,7 +125,32 @@ def _configure_segs_method(args):
 
     if args.method == "baseline":
         return
-    if args.method == "segs_edge_only":
+    if args.method == "eggs_paper":
+        args.use_edge = True
+        args.use_saliency = False
+        args.eggs_style_loss = True
+        args.adaptive_curriculum = False
+        args.segs_densification = False
+        args.weighting_control = False
+        args.shuffle_map_control = False
+    elif args.method == "eggs":
+        args.use_edge = True
+        args.eggs_style_loss = True
+    elif args.method == "saliency":
+        args.use_saliency = True
+        args.eggs_style_loss = True
+    elif args.method == "eggs_saliency":
+        args.use_edge = True
+        args.use_saliency = True
+        args.eggs_style_loss = True
+    elif args.method == "eggs_norm":
+        args.use_edge = True
+    elif args.method == "saliency_norm":
+        args.use_saliency = True
+    elif args.method == "eggs_saliency_norm":
+        args.use_edge = True
+        args.use_saliency = True
+    elif args.method == "segs_edge_only":
         args.use_edge = True
     elif args.method == "segs_saliency_only":
         args.use_saliency = True
@@ -202,14 +235,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     combiner = None
     if args.method != "baseline" or args.segs_densification:
+        edge_processor = Edges.get_edge_processor(args.edge_name)
+        if hasattr(edge_processor, "p"):
+            edge_processor.p = args.edge_p
         combiner = LossCombiner(
-            Edges.get_edge_processor(args.edge_name),
+            edge_processor,
             Saliency.get_saliency_processor(args.saliency_name),
             use_edge=args.use_edge,
             use_saliency=args.use_saliency,
             lambda_edge=args.lambda_edge,
             lambda_saliency=args.lambda_saliency,
-            normalize=True,
+            normalize=not getattr(args, "eggs_style_loss", False),
             constant_scaling_control=args.weighting_control,
             shuffle_map_control=getattr(args, "shuffle_map_control", False),
         )
@@ -521,8 +557,12 @@ if __name__ == "__main__":
     parser.add_argument("--use_edge", action="store_true", default=False)
     parser.add_argument("--use_saliency", action="store_true", default=False)
     parser.add_argument("--edge_name", type=str, default="sobel", choices=["sobel"])
+    parser.add_argument("--edge_p", type=int, default=1, choices=[1, 2],
+                        help="Gradient norm for EGGS-style edge weighting; EGGS paper uses p in {1,2}.")
     parser.add_argument("--saliency_name", type=str, default="BooleanMapApprox", choices=["BooleanMapApprox", "IntensityCenterSurround", "Boolean", "itti"])
     parser.add_argument("--lambda_edge", type=float, default=0.2)
+    parser.add_argument("--eggs_beta", type=float, default=None,
+                        help="Alias for EGGS paper beta. When set, overrides lambda_edge.")
     parser.add_argument("--lambda_saliency", type=float, default=0.1)
     parser.add_argument("--adaptive_curriculum", action="store_true", default=False)
     parser.add_argument("--curriculum_edge_delay", type=float, default=0.05)
@@ -539,8 +579,8 @@ if __name__ == "__main__":
     parser.add_argument("--segs_confidence_power", type=float, default=0.5)
     parser.add_argument("--segs_prune_score_threshold", type=float, default=0.0)
     args = parser.parse_args(sys.argv[1:])
-    if args.method == "eggs":
-        parser.error("Unsupported method 'eggs'. EGGS is not implemented; use 'segs_edge_only' for the edge-only method.")
+    if args.eggs_beta is not None:
+        args.lambda_edge = args.eggs_beta
     if args.method not in SEGS_METHODS:
         parser.error(f"Unsupported method {args.method!r}. Supported methods: {', '.join(SEGS_METHODS)}")
     _configure_segs_method(args)

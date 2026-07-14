@@ -19,8 +19,8 @@ Important restrictions:
 - Do not run training or evaluation automatically on GitHub.
 - All testing, training, packaging, rendering, and evaluation must happen on a
   local or manually operated GPU computer.
-- Do not implement EGGS.
-- Keep the supported demo methods as baseline and segs_full.
+- Support the EGGS-style edge-only comparison as `eggs`.
+- Support the thesis method, EGGS plus saliency weighting, as `eggs_saliency`.
 
 The final required user experience is:
 
@@ -715,7 +715,7 @@ Tests must cover:
 - CSV generation
 - Terminal-table generation
 - HTML-report generation
-- EGGS rejection
+- EGGS and EGGS+saliency method validation
 
 Use only tiny synthetic fixtures for unit tests.
 
@@ -813,7 +813,7 @@ Document:
 
 Do not leave statements saying URLs or checksums are pending.
 
-Do not claim EGGS is implemented.
+Document `eggs` and `eggs_saliency` consistently with the trainer.
 
 ==================================================
 26. DO NOT ADD GITHUB-SIDE EXECUTION

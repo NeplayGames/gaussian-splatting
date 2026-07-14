@@ -6,7 +6,11 @@ from .model_validator import validate_model, ModelValidationError
 
 class AssetError(RuntimeError): pass
 PLACEHOLDER_WORDS=("PENDING","UNVERIFIED","REPLACE","PLACEHOLDER","unknown")
-SUPPORTED_SCENES=('truck','drjohnson'); SUPPORTED_METHODS=('baseline','segs_full')
+SUPPORTED_SCENES=(
+    'bicycle','flowers','garden','stump','treehill','room','counter','kitchen','bonsai',
+    'truck','train','drjohnson','playroom'
+)
+SUPPORTED_METHODS=('baseline','segs_full')
 REQUIRED_MODEL_FIELDS=('name','version','method','scene','seed','iteration','url','information_url','sha256','size_bytes','archive_filename','training_commit','upstream_commit','config_hash','required_files','expected_extracted_files','license_url','attribution')
 
 def contains_placeholder(value): return any(w.lower() in str(value).lower() for w in PLACEHOLDER_WORDS)
@@ -42,7 +46,7 @@ def validate_dataset_entry(entry):
         if not entry.get(k): errors.append(f'dataset {k} is required')
     if not entry.get('required_scenes'): errors.append('dataset required_scenes is required')
     sp=entry.get('scene_paths') or {}
-    for s in SUPPORTED_SCENES:
+    for s in entry.get('required_scenes', []):
         if s not in sp: errors.append(f'dataset scene_paths missing {s}')
     if not entry.get('expected_extracted_files'): errors.append('dataset expected_extracted_files is required')
     if not entry.get('extract_prefixes'): errors.append('dataset extract_prefixes is required')
@@ -64,7 +68,7 @@ def validate_model_entry(entry):
     try:
         if int(entry.get('size_bytes',0))<=0: errors.append('size_bytes must be a positive integer')
     except Exception: errors.append('size_bytes must be a positive integer')
-    if entry.get('scene') not in SUPPORTED_SCENES: errors.append('scene must be truck or drjohnson')
+    if entry.get('scene') not in SUPPORTED_SCENES: errors.append('scene must be one of the supported paper scenes')
     if entry.get('method') not in SUPPORTED_METHODS: errors.append('method must be baseline or segs_full')
     if entry.get('seed') != 0: errors.append('seed must equal 0')
     if entry.get('iteration') != 30000: errors.append('iteration must equal 30000')

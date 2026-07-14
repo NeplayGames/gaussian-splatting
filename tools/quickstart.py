@@ -16,7 +16,7 @@ DISCLAIMER='Reduced-budget demonstration results only; not final thesis results.
 
 def load_config(path='configs/demo.yaml'):
     text=Path(path).read_text()
-    return yaml.safe_load(text) if yaml else {'cache_dir':'~/.cache/segs-demo','output_dir':'./demo_output','iteration':30000,'seed':0,'minimum_disk_gb':80,'scenes':[{'dataset':'tanks_and_temples','scene':'truck'}],'methods':['baseline','segs_full'],'evaluation':{'split':'test'}}
+    return yaml.safe_load(text) if yaml else {'cache_dir':'~/.cache/segs-demo','output_dir':'./demo_output','iteration':30000,'seed':0,'minimum_disk_gb':80,'scenes':[{'dataset':'tanks_and_temples','scene':'truck'}],'methods':['baseline','eggs_saliency'],'evaluation':{'split':'test'}}
 
 def parse_csv(v): return [x.strip() for x in v.split(',') if x.strip()]
 

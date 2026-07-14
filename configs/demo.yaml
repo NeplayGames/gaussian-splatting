@@ -1,14 +1,36 @@
-cache_dir: ~/.cache/segs-demo
+cache_dir: F:/Thesis/segs-demo-cache
 output_dir: ./demo_output
 iteration: 30000
 seed: 0
 minimum_disk_gb: 80
 scenes:
+  - dataset: mipnerf360
+    scene: bicycle
+  - dataset: mipnerf360
+    scene: flowers
+  - dataset: mipnerf360
+    scene: garden
+  - dataset: mipnerf360
+    scene: stump
+  - dataset: mipnerf360
+    scene: treehill
+  - dataset: mipnerf360
+    scene: room
+  - dataset: mipnerf360
+    scene: counter
+  - dataset: mipnerf360
+    scene: kitchen
+  - dataset: mipnerf360
+    scene: bonsai
   - dataset: tanks_and_temples
     scene: truck
+  - dataset: tanks_and_temples
+    scene: train
   - dataset: deep_blending
     scene: drjohnson
-methods: [baseline, segs_full]
+  - dataset: deep_blending
+    scene: playroom
+methods: [baseline, eggs_saliency]
 evaluation:
   split: test
   metrics: [psnr, ssim, lpips]

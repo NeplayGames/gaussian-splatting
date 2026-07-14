@@ -234,7 +234,10 @@ def readCamerasFromTransforms(path, transformsfile, depths_folder, white_backgro
 
         frames = contents["frames"]
         for idx, frame in enumerate(frames):
-            cam_name = os.path.join(path, frame["file_path"] + extension)
+            frame_path = frame["file_path"]
+            if not os.path.splitext(frame_path)[1]:
+                frame_path += extension
+            cam_name = os.path.normpath(os.path.join(path, frame_path))
 
             # NeRF 'transform_matrix' is a camera-to-world transform
             c2w = np.array(frame["transform_matrix"])
@@ -246,7 +249,7 @@ def readCamerasFromTransforms(path, transformsfile, depths_folder, white_backgro
             R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
             T = w2c[:3, 3]
 
-            image_path = os.path.join(path, cam_name)
+            image_path = cam_name
             image_name = Path(cam_name).stem
             image = Image.open(image_path)
 

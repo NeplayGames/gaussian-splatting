@@ -17,6 +17,7 @@ dependencies:
   - pip
   - pip:
       - lpips
+      - opencv-python<5
       - pytest
 # Tested environment must be filled by maintainers after local GPU validation.
 # Local validation target: Ubuntu 22.04, NVIDIA driver 535+, CUDA runtime 11.8, RTX-class GPU.
