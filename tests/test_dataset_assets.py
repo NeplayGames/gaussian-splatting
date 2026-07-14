@@ -53,6 +53,23 @@ def test_corrupt_cached_archive_offline_fails_and_online_redownloads(tmp_path, m
     out=download_asset(e, tmp_path)
     assert out.read_bytes()!=b'bad'
 
+
+
+def test_invalid_download_part_is_removed_before_online_retry(tmp_path, monkeypatch):
+    data=b'abcdef'; e=entry_for(data); root=ensure_cache(tmp_path)
+    payload=bytearray(b'bad')
+    class R:
+        status=200; headers={'Content-Length':'3'}
+        def __enter__(self): return self
+        def __exit__(self,*a): pass
+        def read(self,n=-1):
+            if not payload: return b''
+            c=bytes(payload[:n]); del payload[:n]; return c
+        def getcode(self): return self.status
+    monkeypatch.setattr('urllib.request.urlopen', lambda *a,**k: R())
+    with pytest.raises(AssetError): download_asset(e,tmp_path)
+    assert not (root/'downloads'/'tandt_db.zip.part').exists()
+
 def test_missing_archive_offline_fails(tmp_path):
     with pytest.raises(AssetError): download_asset(entry_for(valid_zip()), tmp_path, offline=True)
 
