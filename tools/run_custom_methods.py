@@ -3,6 +3,8 @@ import csv
 import json
 import math
 import os
+import random
+import shutil
 import subprocess
 import sys
 import time
@@ -58,6 +60,135 @@ def count_ply_vertices(path: Path):
     except OSError:
         return None
     return None
+
+
+def result_key(record: dict) -> tuple:
+    return (
+        record.get("dataset", ""),
+        record.get("scene", ""),
+        record.get("method", ""),
+        record.get("run_name", ""),
+        record.get("saliency_name", ""),
+        record.get("normalization", ""),
+        str(record.get("seed", "")),
+        str(record.get("iteration", "")),
+        record.get("split", ""),
+        str(record.get("lambda_edge", "")),
+        str(record.get("lambda_saliency", "")),
+        str(record.get("eggs_beta", "")),
+        str(record.get("edge_p", "")),
+    )
+
+
+def merge_existing_results(results_path: Path, records: list[dict]) -> list[dict]:
+    merged: dict[tuple, dict] = {}
+    if results_path.exists():
+        with results_path.open("r", newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                merged[result_key(row)] = row
+
+    for record in records:
+        merged[result_key(record)] = record
+    return list(merged.values())
+
+
+def load_existing_results(results_path: Path) -> dict[tuple, dict]:
+    results: dict[tuple, dict] = {}
+    if not results_path.exists():
+        return results
+    with results_path.open("r", newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            results[result_key(row)] = row
+    return results
+
+
+def expected_record_key(args, dataset: str, scene_name: str, method: str, run_name: str, saliency_name: str | None) -> tuple:
+    record = {
+        "dataset": dataset,
+        "scene": scene_name,
+        "method": method,
+        "run_name": run_name,
+        "saliency_name": saliency_name or "",
+        "normalization": "mean_one" if method.endswith("_norm") else "raw",
+        "lambda_edge": args.lambda_edge,
+        "lambda_saliency": args.lambda_saliency,
+        "eggs_beta": args.eggs_beta if args.eggs_beta is not None else args.lambda_edge,
+        "edge_p": args.edge_p,
+        "seed": args.seed,
+        "iteration": args.iterations,
+        "split": args.split,
+    }
+    return result_key(record)
+
+
+def csv_record_complete(record: dict | None) -> bool:
+    if not record:
+        return False
+    for key in ("psnr", "ssim", "lpips"):
+        try:
+            value = float(record.get(key, ""))
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(value):
+            return False
+    return True
+
+
+def prune_after_metrics(model_dir: Path, output_root: Path, split: str) -> list[str]:
+    model_root = (output_root / "models").resolve()
+    resolved_model_dir = model_dir.resolve()
+    if model_root not in resolved_model_dir.parents:
+        raise ValueError(f"Refusing to prune outside output model root: {resolved_model_dir}")
+
+    removed = []
+    for path in (model_dir / "point_cloud", model_dir / split):
+        if path.exists():
+            shutil.rmtree(path)
+            removed.append(str(path))
+
+    for path in model_dir.glob("chkpnt*.pth"):
+        if path.is_file():
+            path.unlink()
+            removed.append(str(path))
+    return removed
+
+
+def keep_render_samples(model_dir: Path, iteration: int, split: str, count: int, seed_label: str) -> list[str]:
+    if count <= 0:
+        return []
+
+    render_root = model_dir / split / f"ours_{iteration}"
+    render_dir = render_root / "renders"
+    gt_dir = render_root / "gt"
+    if not render_dir.is_dir():
+        return []
+
+    renders = sorted(render_dir.glob("*.png"))
+    if not renders:
+        return []
+
+    rng = random.Random(seed_label)
+    selected = sorted(rng.sample(renders, min(count, len(renders))))
+    sample_root = model_dir / "render_samples" / f"{split}_ours_{iteration}"
+    if sample_root.exists():
+        shutil.rmtree(sample_root)
+    (sample_root / "renders").mkdir(parents=True, exist_ok=True)
+    (sample_root / "gt").mkdir(parents=True, exist_ok=True)
+
+    copied = []
+    for render_path in selected:
+        render_target = sample_root / "renders" / render_path.name
+        shutil.copy2(render_path, render_target)
+        copied.append(str(render_target))
+
+        gt_path = gt_dir / render_path.name
+        if gt_path.exists():
+            gt_target = sample_root / "gt" / gt_path.name
+            shutil.copy2(gt_path, gt_target)
+            copied.append(str(gt_target))
+    return copied
 
 
 def valid_training(model_dir: Path, iteration: int) -> bool:
@@ -143,6 +274,11 @@ def main() -> int:
     parser.add_argument("--scene-name")
     parser.add_argument("--dataset", default="")
     parser.add_argument("--output-root", default=Path("demo_output"), type=Path)
+    parser.add_argument(
+        "--results-csv",
+        default="guidance_ablation_results.csv",
+        help="CSV filename under output-root, or an explicit path, for merged run results.",
+    )
     parser.add_argument("--iterations", default=30000, type=int)
     parser.add_argument("--methods", default="baseline,eggs_paper,eggs,saliency,eggs_saliency,eggs_norm,saliency_norm,eggs_saliency_norm")
     parser.add_argument("--saliency-methods", default="BooleanMapApprox,IntensityCenterSurround")
@@ -159,10 +295,36 @@ def main() -> int:
     parser.add_argument("--edge-region-fraction", default=0.10, type=float)
     parser.add_argument("--saliency-region-fraction", default=0.10, type=float)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--csv-complete-resume",
+        action="store_true",
+        help="With --resume, skip a run when guidance_ablation_results.csv already has complete metrics for it.",
+    )
+    parser.add_argument(
+        "--prune-after-metrics",
+        action="store_true",
+        help="After metrics are recorded, remove bulky point_cloud and render artifacts for the run.",
+    )
+    parser.add_argument(
+        "--keep-render-samples",
+        default=0,
+        type=int,
+        help="With --prune-after-metrics, keep this many random render/GT image pairs per run.",
+    )
+    parser.add_argument(
+        "--render-sample-seed",
+        default=0,
+        type=int,
+        help="Seed used to choose render samples reproducibly.",
+    )
     args = parser.parse_args()
     if not args.matrix and (args.source is None or args.scene_name is None):
         parser.error("--source and --scene-name are required unless --matrix is provided")
 
+    results_path = Path(args.results_csv)
+    if not results_path.is_absolute():
+        results_path = args.output_root / results_path
+    existing_results = load_existing_results(results_path)
     records = []
     methods = matrix_methods(args)
     saliency_methods = matrix_saliency_methods(args)
@@ -178,6 +340,11 @@ def main() -> int:
             saliency_names = saliency_methods if saliency_method_required(method) else [None]
             for saliency_name in saliency_names:
                 run_name = method_run_name(method, saliency_name)
+                expected_key = expected_record_key(args, dataset, scene_name, method, run_name, saliency_name)
+                if args.resume and args.csv_complete_resume and csv_record_complete(existing_results.get(expected_key)):
+                    print(f"CSV resume: skipping completed {scene_name}/{run_name}")
+                    continue
+
                 model_dir = args.output_root / "models" / scene_name / run_name
                 log_dir = args.output_root / "logs" / scene_name / run_name
                 model_dir.mkdir(parents=True, exist_ok=True)
@@ -247,9 +414,19 @@ def main() -> int:
                     "log_path": str(log_dir.resolve()),
                 }
                 record.update({key: round(value, 6) if isinstance(value, float) else value for key, value in values.items()})
+                if args.prune_after_metrics:
+                    sample_seed = f"{args.render_sample_seed}:{scene_name}:{run_name}:{args.iterations}:{args.split}"
+                    samples = keep_render_samples(model_dir, args.iterations, args.split, args.keep_render_samples, sample_seed)
+                    removed = prune_after_metrics(model_dir, args.output_root, args.split)
+                    record["kept_render_samples"] = json.dumps(samples)
+                    record["pruned_artifacts"] = json.dumps(removed)
                 records.append(record)
 
-    results_path = args.output_root / "guidance_ablation_results.csv"
+    if not records:
+        print(f"No new results to write; kept {results_path}")
+        return 0
+
+    records = merge_existing_results(results_path, records)
     fieldnames = sorted({key for record in records for key in record.keys()})
     with results_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)

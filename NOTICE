@@ -1,0 +1,14 @@
+SEGS provenance and licensing notice
+
+This repository is a derivative work based on "3D Gaussian Splatting for
+Real-Time Radiance Field Rendering" by Bernhard Kerbl, Georgios Kopanas,
+Thomas Leimkuehler, and George Drettakis:
+
+https://github.com/graphdeco-inria/gaussian-splatting
+
+The upstream software is owned by Inria and the Max Planck Institute for
+Informatics and is distributed under the custom non-commercial research
+license reproduced in LICENSE.md.
+
+SEGS modifications are distributed under the same terms. No MIT or Apache
+license is asserted for the derived codebase.
